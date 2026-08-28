@@ -1,0 +1,28 @@
+/**:
+  ros__parameters:
+    use_sim_time: true
+    control_rate: 20.0
+    max_linear: 0.46
+    max_angular: 1.8
+    linear_accel: 0.7
+    angular_accel: 2.8
+    stale_timeout: 2.0
+    prediction_horizon: 4.0
+    prediction_step: 0.2
+    velocity_alpha: 0.35
+    chase_distance: 1.6
+    capture_control_distance: 0.55
+    capture_radius: 0.5
+    capture_speed: 0.16
+    capture_hold: 1.0
+    match_duration: 180.0
+    turn_gain: 2.2
+    arena_half: 5.0
+    boundary_margin: 0.55
+    lookahead: 1.25
+    distance_weight: 1.0
+    clearance_weight: 1.7
+    open_weight: 0.6
+    smooth_weight: 0.35
+    planning_resolution: 0.20
+    obstacle_inflation_radius: 0.30
