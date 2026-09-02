@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from rclpy.qos import qos_profile_sensor_data
 from turtle_pursuit.common.geometry import Pose2D, Velocity2D, quaternion_to_yaw, Command
+from turtle_pursuit.perception.camera import detect_colored_target, detection_to_world
 
 @dataclass
 class Observation:
@@ -13,25 +14,63 @@ class RosStateAdapter:
     """Replaceable ROS adapter. Algorithms only consume Pose2D/Velocity2D/scan tuples."""
     def __init__(self,node):
         self.node=node; self.catcher=Observation(); self.runner=Observation(); self.scan=None
-        self.catcher_pub=node.create_publisher(TwistStamped,'/catcher/diffdrive_controller/cmd_vel',10)
-        self.runner_pub=node.create_publisher(TwistStamped,'/runner/diffdrive_controller/cmd_vel',10)
+        self.camera_received=0.0; self.camera_detection=None; self._color=None; self._depth=None; self._camera_info=None
+        defaults={
+            'catcher_pose_topic':'/catcher/sim_ground_truth_pose',
+            'runner_pose_topic':'/runner/sim_ground_truth_pose',
+            'catcher_cmd_topic':'/catcher/diffdrive_controller/cmd_vel',
+            'runner_cmd_topic':'/runner/diffdrive_controller/cmd_vel',
+            'catcher_scan_topic':'/catcher/scan',
+            'runner_scan_topic':'/runner/scan',
+            'catcher_color_topic':'/catcher/camera/color/image_raw',
+            'runner_color_topic':'/runner/camera/color/image_raw',
+            'catcher_depth_topic':'/catcher/camera/depth/image_raw',
+            'runner_depth_topic':'/runner/camera/depth/image_raw',
+            'catcher_camera_info_topic':'/catcher/camera/color/camera_info',
+            'runner_camera_info_topic':'/runner/camera/color/camera_info',
+        }
+        for name,value in defaults.items():
+            if not node.has_parameter(name): node.declare_parameter(name,value)
+        self.topics={name:node.get_parameter(name).value for name in defaults}
+        self.catcher_pub=node.create_publisher(TwistStamped,self.topics['catcher_cmd_topic'],10)
+        self.runner_pub=node.create_publisher(TwistStamped,self.topics['runner_cmd_topic'],10)
         # The installed TurtleBot simulator publishes global Gazebo truth here.
         # Swap these subscriptions for odometry/perception in a competition adapter.
-        node.create_subscription(Odometry,'/catcher/sim_ground_truth_pose',lambda m:self._odom(m,self.catcher),qos_profile_sensor_data)
-        node.create_subscription(Odometry,'/runner/sim_ground_truth_pose',lambda m:self._odom(m,self.runner),qos_profile_sensor_data)
+        node.create_subscription(Odometry,self.topics['catcher_pose_topic'],lambda m:self._odom(m,self.catcher),qos_profile_sensor_data)
+        node.create_subscription(Odometry,self.topics['runner_pose_topic'],lambda m:self._odom(m,self.runner),qos_profile_sensor_data)
     def subscribe_scan(self, role):
-        self.node.create_subscription(LaserScan,f'/{role}/scan',self._scan,qos_profile_sensor_data)
+        self.node.create_subscription(LaserScan,self.topics[f'{role}_scan_topic'],self._scan,qos_profile_sensor_data)
+    def subscribe_camera(self, observer_role, target_role):
+        self.node.create_subscription(Image,self.topics[f'{observer_role}_color_topic'],lambda m:self._image(m,observer_role,target_role),qos_profile_sensor_data)
+        self.node.create_subscription(Image,self.topics[f'{observer_role}_depth_topic'],self._depth_image,qos_profile_sensor_data)
+        self.node.create_subscription(CameraInfo,self.topics[f'{observer_role}_camera_info_topic'],self._camera_information,qos_profile_sensor_data)
     def _odom(self,m,o):
         p=m.pose.pose.position; q=m.pose.pose.orientation; t=self.now()
         o.pose=Pose2D(p.x,p.y,quaternion_to_yaw(q.x,q.y,q.z,q.w),t)
         o.velocity=Velocity2D(m.twist.twist.linear.x,m.twist.twist.linear.y,m.twist.twist.angular.z); o.received=t
     def _scan(self,m): self.scan=(list(m.ranges),m.angle_min,m.angle_increment,self.now())
+    def _depth_image(self,m): self._depth=m
+    def _camera_information(self,m): self._camera_info=m
+    def _image(self,m,observer_role,target_role):
+        self._color=m; self.camera_received=self.now()
+        color='red' if target_role=='catcher' else 'blue'
+        self.camera_detection=detect_colored_target(m,self._depth,self._camera_info,color)
+        observer=getattr(self,observer_role); target=getattr(self,target_role)
+        if observer.pose is None or self.camera_detection is None or self.camera_detection.confidence < .15:
+            return
+        estimate=detection_to_world(observer.pose,self.camera_detection)
+        now=self.now()
+        if estimate is not None and (target.pose is None or now-target.received>.25):
+            estimate.stamp=now; target.pose=estimate; target.received=now
     def now(self): return self.node.get_clock().now().nanoseconds*1e-9
     def get_catcher_pose(self): return self.catcher.pose
     def get_runner_pose(self): return self.runner.pose
     def get_catcher_velocity(self): return self.catcher.velocity
     def get_runner_velocity(self): return self.runner.velocity
     def get_obstacles(self): return self.scan
+    def get_scan(self, timeout=1.0):
+        return self.scan if self.scan is not None and self.now()-self.scan[3] <= timeout else None
+    def camera_fresh(self, timeout=1.0): return self.camera_received>0 and self.now()-self.camera_received<=timeout
     def stale(self, timeout):
         n=self.now(); return not self.catcher.pose or not self.runner.pose or n-self.catcher.received>timeout or n-self.runner.received>timeout
     def _twist(self,c):

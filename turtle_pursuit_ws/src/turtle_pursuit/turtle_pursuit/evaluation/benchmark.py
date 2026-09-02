@@ -6,8 +6,8 @@ from turtle_pursuit.common.geometry import Pose2D, Velocity2D, distance, normali
 from turtle_pursuit.tracking.velocity import VelocityEstimator
 from turtle_pursuit.evaluation.match import CaptureDetector
 
-C_CFG={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'chase_distance':1.6,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2}
-R_CFG={'max_linear':.34,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35}
+C_CFG={'max_linear':.70,'cruise_linear':.44,'catcher_cruise_distance':1.,'catcher_boost_distance':3.5,'prediction_horizon':4.,'prediction_step':.2,'chase_distance':1.6,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2}
+R_CFG={'max_linear':.70,'cruise_linear':.44,'runner_boost_distance':3.,'emergency_escape_distance':1.15,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35}
 
 def step_robot(p,cmd,dt): p.yaw=normalize_angle(p.yaw+max(-1.8,min(1.8,cmd.angular))*dt); p.x+=cmd.linear*math.cos(p.yaw)*dt; p.y+=cmd.linear*math.sin(p.yaw)*dt; return p
 def run(catcher_strategy,behavior,seed,duration=60.):
@@ -22,17 +22,21 @@ def run(catcher_strategy,behavior,seed,duration=60.):
             from turtle_pursuit.common.geometry import Command
             rc=Command(.26,random.uniform(-1.2,1.2) if int(t*2)!=int((t-dt)*2) else .2)
         elif behavior=='stationary': rc=rs.command(c,r,'stationary')
-        else: rc=rs.command(c,r,'strategic' if behavior in ('strategic','wall_aware','obstacle_weaving') else 'baseline')
+        else: rc=rs.command(c,r,'competitive' if behavior=='competitive' else ('adversarial' if behavior=='adversarial' else ('strategic' if behavior in ('strategic','wall_aware','obstacle_weaving') else 'baseline')))
         step_robot(c,cc,dt); step_robot(r,rc,dt); c.stamp=r.stamp=t; cp+=distance(c,oldc); rp+=distance(r,oldr); sep=distance(c,r); minimum=min(minimum,sep); t+=dt
         if det.update(sep,t): break
     return {'catcher_strategy':catcher_strategy,'runner_behavior':behavior,'seed':seed,'capture_success':t<duration,'capture_time':round(t,3) if t<duration else '','survival_time':round(t,3),'minimum_separation':round(minimum,3),'collisions':0,'catcher_path_length':round(cp,3),'runner_path_length':round(rp,3)}
 def main(args=None):
-    ap=argparse.ArgumentParser(); ap.add_argument('--seeds',type=int,default=3); ap.add_argument('--duration',type=float,default=60.); ap.add_argument('--output',default='benchmark_results.csv'); ns=ap.parse_args(args); rows=[]
+    ap=argparse.ArgumentParser(); ap.add_argument('--seeds',type=int,default=3); ap.add_argument('--duration',type=float,default=60.); ap.add_argument('--output',default='benchmark_results.csv'); ap.add_argument('--require-all-captures',action='store_true'); ns=ap.parse_args(args); rows=[]
     for cs in ('baseline','predictive'):
-        for b in ('stationary','straight','random_walk','circular','wall_aware','obstacle_weaving','strategic'):
+        for b in ('stationary','straight','random_walk','circular','wall_aware','obstacle_weaving','strategic','adversarial'):
             for seed in range(ns.seeds): rows.append(run(cs,b,seed,ns.duration))
     out=Path(ns.output); out.parent.mkdir(parents=True,exist_ok=True)
-    with out.open('w',newline='',encoding='utf-8') as f: w=csv.DictWriter(f,fieldnames=rows[0]); w.writeheader(); w.writerows(rows)
+    with out.open('w',newline='',encoding='utf-8') as f: w=csv.DictWriter(f,fieldnames=rows[0],lineterminator='\n'); w.writeheader(); w.writerows(rows)
     for cs in ('baseline','predictive'):
         subset=[r for r in rows if r['catcher_strategy']==cs]; wins=sum(r['capture_success'] for r in subset); times=[float(r['capture_time']) for r in subset if r['capture_time']!='']; print(f'{cs}: {wins}/{len(subset)} captures, mean capture {sum(times)/len(times):.2f}s' if times else f'{cs}: 0 captures')
     print(out.resolve())
+    failures=[r for r in rows if not r['capture_success']]
+    if ns.require_all_captures and failures:
+        failed_cases=sorted({(r['catcher_strategy'],r['runner_behavior']) for r in failures})
+        raise SystemExit(f'benchmark gate failed: {len(failures)} missed captures in {failed_cases}')

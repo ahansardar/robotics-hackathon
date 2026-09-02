@@ -4,11 +4,15 @@
   <description>Autonomous two-robot pursuit and evasion for TurtleBot 4 Lite.</description>
   <maintainer email="team@example.com">IITBBS Robotics Team</maintainer><license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
-  <exec_depend>rclpy</exec_depend><exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>rcl_interfaces</exec_depend><exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend><exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>std_msgs</exec_depend><exec_depend>visualization_msgs</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend><exec_depend>ros_gz_bridge</exec_depend>
-  <exec_depend>turtlebot4_gz_bringup</exec_depend>
+  <exec_depend>xacro</exec_depend><exec_depend>turtlebot4_description</exec_depend>
+  <exec_depend>turtlebot4_gz_bringup</exec_depend><exec_depend>irobot_create_description</exec_depend>
+  <exec_depend>irobot_create_control</exec_depend><exec_depend>irobot_create_gz_bringup</exec_depend>
   <exec_depend>irobot_create_msgs</exec_depend>
   <test_depend>ament_pytest</test_depend><test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>

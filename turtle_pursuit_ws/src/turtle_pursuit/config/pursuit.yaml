@@ -2,9 +2,13 @@
   ros__parameters:
     use_sim_time: true
     control_rate: 20.0
-    max_linear: 0.46
+    max_linear: 0.70
+    cruise_linear: 0.44
+    runner_boost_distance: 3.0
+    catcher_cruise_distance: 1.0
+    catcher_boost_distance: 3.5
     max_angular: 1.8
-    linear_accel: 0.7
+    linear_accel: 1.2
     angular_accel: 2.8
     stale_timeout: 2.0
     prediction_horizon: 4.0
@@ -24,5 +28,62 @@
     clearance_weight: 1.7
     open_weight: 0.6
     smooth_weight: 0.35
+    emergency_escape_distance: 1.15
+    adversarial_break_weight: 0.90
+    adversarial_interval: 0.80
+    survival_radial_weight: 3.50
+    safe_feint_distance: 2.60
+    shield_radius: 1.05
+    shield_reach_weight: 1.60
+    shield_lost_margin: 0.35
+    shield_switch_hysteresis: 0.75
+    shield_association_distance: 0.75
+    shield_join_ratio: 1.45
+    shield_join_step: 0.65
+    shield_orbit_step: 0.48
+    shield_obstacles: []
+    obstacle_map_resolution: 0.15
+    obstacle_map_range: 4.5
+    obstacle_wall_margin: 0.70
+    obstacle_min_cluster_cells: 4
+    obstacle_map_min_range: 0.12
+    obstacle_map_ttl: 15.0
+    obstacle_opponent_exclusion: 0.48
+    obstacle_max_component_span: 2.20
+    obstacle_bridge_gap_cells: 2
+    lidar_stop_distance: 0.65
+    lidar_influence_distance: 1.35
+    navigator_robot_radius: 0.32
+    navigator_clearance_cap: 3.0
+    navigator_heading_samples: 48
+    navigator_clearance_weight: 1.35
+    navigator_goal_weight: 2.10
+    navigator_continuity_weight: 0.75
+    navigator_stall_window: 1.25
+    navigator_stall_distance: 0.055
+    navigator_recovery_time: 0.90
+    catcher_navigator_robot_radius: 0.29
+    catcher_navigator_clearance_weight: 1.05
+    catcher_navigator_goal_weight: 3.20
+    catcher_navigator_continuity_weight: 0.50
+    anti_shield_trigger: 1.65
+    anti_shield_radius: 1.12
+    anti_shield_step: 0.72
+    flank_association_distance: 0.75
+    flank_angular_velocity_threshold: 0.08
     planning_resolution: 0.20
     obstacle_inflation_radius: 0.30
+    catcher_pose_topic: /catcher/sim_ground_truth_pose
+    runner_pose_topic: /runner/sim_ground_truth_pose
+    catcher_cmd_topic: /catcher/diffdrive_controller/cmd_vel
+    runner_cmd_topic: /runner/diffdrive_controller/cmd_vel
+    catcher_scan_topic: /catcher/scan
+    runner_scan_topic: /runner/scan
+    catcher_color_topic: /catcher/camera/color/image_raw
+    runner_color_topic: /runner/camera/color/image_raw
+    catcher_depth_topic: /catcher/camera/depth/image_raw
+    runner_depth_topic: /runner/camera/depth/image_raw
+    catcher_camera_info_topic: /catcher/camera/color/camera_info
+    runner_camera_info_topic: /runner/camera/color/camera_info
+    sensor_timeout: 1.0
+    sensor_startup_grace: 5.0

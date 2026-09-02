@@ -26,7 +26,11 @@ class EvaluatorNode(Node):
         self.cpath+=distance(c,self.last_c); self.rpath+=distance(r,self.last_r); self.last_c=c; self.last_r=r
         captured=self.detector.update(sep,now); timeout=elapsed>=self.get_parameter('match_duration').value
         state='CAPTURED' if captured else ('SURVIVED' if timeout else 'RUNNING')
-        msg=String(); msg.data=json.dumps({'state':state,'elapsed':round(elapsed,3),'separation':round(sep,3),'hold':0 if self.detector.entered is None else round(now-self.detector.entered,3),'catcher_mode':self.cmode,'runner_mode':self.rmode}); self.state_pub.publish(msg); self.publish_markers(c,r,sep,state)
+        hold=0 if self.detector.entered is None else max(0.,now-self.detector.entered)
+        duration=self.get_parameter('match_duration').value
+        cv=self.adapter.get_catcher_velocity(); rv=self.adapter.get_runner_velocity()
+        telemetry={'state':state,'elapsed':round(elapsed,3),'remaining':round(max(0.,duration-elapsed),3),'duration':duration,'separation':round(sep,3),'minimum_separation':round(self.minimum,3),'hold':round(hold,3),'hold_required':self.detector.hold,'capture_progress':round(min(1.,hold/self.detector.hold),3),'catcher_mode':self.cmode,'runner_mode':self.rmode,'catcher_speed':round(math.hypot(cv.vx,cv.vy),3) if cv else 0.,'runner_speed':round(math.hypot(rv.vx,rv.vy),3) if rv else 0.,'catcher_path_length':round(self.cpath,3),'runner_path_length':round(self.rpath,3),'collisions':self.collisions}
+        msg=String(); msg.data=json.dumps(telemetry); self.state_pub.publish(msg); self.publish_markers(c,r,sep,state)
         if captured or timeout: self.finish(state,elapsed,sep)
     def publish_markers(self,c,r,sep,state):
         arr=MarkerArray()

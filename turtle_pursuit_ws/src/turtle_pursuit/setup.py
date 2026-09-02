@@ -18,7 +18,9 @@ setup(
         'catcher = turtle_pursuit.catcher.node:main',
         'runner = turtle_pursuit.runner.node:main',
         'evaluator = turtle_pursuit.evaluation.node:main',
+        'dashboard = turtle_pursuit.evaluation.dashboard:main',
         'benchmark = turtle_pursuit.evaluation.benchmark:main',
         'sensorless_description = turtle_pursuit.adapters.sensorless_description:main',
+        'robot_description = turtle_pursuit.adapters.sensorless_description:main',
     ]},
 )
