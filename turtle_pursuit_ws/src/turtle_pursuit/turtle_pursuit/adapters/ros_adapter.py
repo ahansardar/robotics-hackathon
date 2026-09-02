@@ -58,7 +58,12 @@ class RosStateAdapter:
         observer=getattr(self,observer_role); target=getattr(self,target_role)
         if observer.pose is None or self.camera_detection is None or self.camera_detection.confidence < .15:
             return
-        estimate=detection_to_world(observer.pose,self.camera_detection)
+        # Reject a detection implying a jump no TurtleBot 4 Lite could make
+        # since the last trusted pose (defense in depth: color alone cannot
+        # rule out every possible false-positive surface, only the ones
+        # already tightened for in detect_colored_target). Skipped on the
+        # very first detection, when there is no prior pose to check against.
+        estimate=detection_to_world(observer.pose,self.camera_detection,previous=target.pose,max_speed=1.6)
         now=self.now()
         if estimate is not None and (target.pose is None or now-target.received>.25):
             estimate.stamp=now; target.pose=estimate; target.received=now

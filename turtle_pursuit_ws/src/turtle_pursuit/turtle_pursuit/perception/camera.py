@@ -54,8 +54,15 @@ def detect_colored_target(image, depth, camera_info, target_color):
             r = image.data[offset+ri]
             g = image.data[offset+gi]
             b = image.data[offset+bi]
-            red = r >= 100 and r > 1.45*g and r > 1.35*b
-            blue = b >= 90 and b > 1.25*g and b > 1.45*r
+            # The ratio-only tests below classify saturated orange as "red"
+            # (e.g. an arena obstacle painted diffuse (1, 0.55, 0.08), which is
+            # roughly RGB 255/140/20: 255 > 1.45*140 and 255 > 1.35*20 both
+            # hold). A true red marker has a low green channel; orange does
+            # not, so cap it explicitly rather than relying on ratios alone.
+            # Same reasoning caps blue's red channel against a magenta/purple
+            # false positive.
+            red = r >= 100 and r > 1.45*g and r > 1.35*b and g <= 110
+            blue = b >= 90 and b > 1.25*g and b > 1.45*r and r <= 110
             if (target_color == 'red' and red) or (target_color == 'blue' and blue):
                 xs.append(x)
                 ys.append(y)
@@ -77,13 +84,24 @@ def detect_colored_target(image, depth, camera_info, target_color):
     return CameraDetection(bearing, distance, min(1.0, len(xs)/max(12.0, sampled*.01)))
 
 
-def detection_to_world(observer, detection):
+def detection_to_world(observer, detection, previous=None, max_speed=None):
+    """Project a bearing/range detection into a world pose.
+
+    If `previous` (the target's last trusted world pose) and `max_speed` are
+    both given, a detection implying a physically impossible jump since then
+    is rejected (returns None) instead of silently overwriting a good
+    estimate with a spurious color match. This is defense in depth alongside
+    the tightened color thresholds above: any object that happens to share a
+    hue with the role marker -- not just the specific obstacle color already
+    fixed above -- could otherwise hijack the tracked pose.
+    """
     if detection is None or detection.distance is None:
         return None
     heading = observer.yaw+detection.bearing
-    return Pose2D(
-        observer.x+detection.distance*math.cos(heading),
-        observer.y+detection.distance*math.sin(heading),
-        heading,
-        observer.stamp,
-    )
+    x = observer.x+detection.distance*math.cos(heading)
+    y = observer.y+detection.distance*math.sin(heading)
+    if previous is not None and max_speed is not None:
+        dt = observer.stamp-previous.stamp
+        if dt > 1e-3 and math.hypot(x-previous.x, y-previous.y)/dt > max_speed:
+            return None
+    return Pose2D(x, y, heading, observer.stamp)

@@ -12,7 +12,7 @@ from turtle_pursuit.evaluation.match import CaptureDetector
 from turtle_pursuit.common.config import load_config
 from turtle_pursuit.control.motion import AdaptiveNavigator, MotionLimiter, avoid_scan, boundary_recovery, drive_to_bidirectional, dynamic_speed
 from turtle_pursuit.common.geometry import Command
-from turtle_pursuit.perception.camera import detect_colored_target, detection_to_world
+from turtle_pursuit.perception.camera import CameraDetection, detect_colored_target, detection_to_world
 from turtle_pursuit.perception.obstacles import ObstacleMapper
 
 def test_angles_and_quaternion():
@@ -71,6 +71,20 @@ def test_predictive_catcher_captures_circular_runner():
     result=run('predictive','circular',0,20.)
     assert result['capture_success'] and result['capture_time']<10
 
+def test_benchmark_collisions_are_measured_not_hardcoded():
+    """`collisions` must reflect real body-contact transitions, not a
+    placeholder -- a prior version hardcoded this field to 0 in every row,
+    which read as validated collision safety that was never actually
+    measured. A capture that closes to near-zero separation (stationary
+    Runner, plenty of time) should register at least one contact transition;
+    a deliberately generous collision_distance of 0 can never register one.
+    """
+    from turtle_pursuit.evaluation.benchmark import run
+    closes_in=run('predictive','stationary',0,30.)
+    assert closes_in['collisions']>=1
+    never_touches=run('predictive','stationary',0,30.,collision_distance=0.0)
+    assert never_touches['collisions']==0
+
 def test_lidar_avoidance_does_not_reject_capture_target():
     ranges=[2.,2.,.5,2.,2.]
     desired=Command(.3,0.)
@@ -90,6 +104,34 @@ def test_rgbd_detects_blue_target_and_projects_world_pose():
     pose=detection_to_world(Pose2D(1.,2.,0.),detection)
     assert detection is not None and abs(detection.distance-2.)<1e-6
     assert pose.x>2.9 and abs(pose.y-2.)<.2
+
+def _solid_patch_image(width,height,r,g,b,region=(4,8,4,8)):
+    pixels=bytearray(width*height*3); x0,x1,y0,y1=region
+    for y in range(y0,y1):
+        for x in range(x0,x1):
+            offset=(y*width+x)*3; pixels[offset]=r; pixels[offset+1]=g; pixels[offset+2]=b
+    return SimpleNamespace(encoding='rgb8',width=width,height=height,step=width*3,data=bytes(pixels))
+
+def test_camera_does_not_mistake_a_painted_obstacle_for_the_red_catcher():
+    """Regression test: an arena obstacle painted diffuse (1, 0.55, 0.08) --
+    roughly RGB 255/140/20 -- passed the old ratio-only red test even though
+    it is a static obstacle, not the red Catcher marker. A vision fallback
+    locking onto that obstacle would make a robot chase or evade furniture.
+    """
+    image=_solid_patch_image(12,12,255,140,20)
+    assert detect_colored_target(image,None,None,'red') is None
+
+def test_camera_still_detects_a_true_red_marker():
+    image=_solid_patch_image(12,12,220,40,35)
+    assert detect_colored_target(image,None,None,'red') is not None
+
+def test_detection_to_world_rejects_an_implausible_jump():
+    previous=Pose2D(0.,0.,0.,10.0)
+    observer=Pose2D(0.,0.,0.,10.2)
+    impossible=CameraDetection(bearing=0.0,distance=5.0,confidence=1.0)
+    assert detection_to_world(observer,impossible,previous=previous,max_speed=1.5) is None
+    plausible=CameraDetection(bearing=0.0,distance=0.2,confidence=1.0)
+    assert detection_to_world(observer,plausible,previous=previous,max_speed=1.5) is not None
 
 def test_runner_uses_breakaway_inside_emergency_radius():
     cfg={'max_linear':.34,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35,'emergency_escape_distance':1.15}

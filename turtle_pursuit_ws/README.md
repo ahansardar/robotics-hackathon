@@ -110,7 +110,7 @@ bash scripts/run_benchmarks.sh 10 180
 # or: ros2 run turtle_pursuit benchmark --seeds 10 --duration 180 --output benchmark_results.csv
 ```
 
-CSV columns contain strategies, seed, capture success/time, survival time, minimum separation, collisions, and both path lengths. This is an algorithm benchmark, not a substitute for the Gazebo trial.
+CSV columns contain strategies, seed, capture success/time, survival time, minimum separation, collisions, and both path lengths. `collisions` here counts Catcher/Runner body-contact transitions (separation crossing below the ~0.34 m combined footprint radius) and is genuinely computed, not modeled from geometry; this benchmark has no obstacle layout, so it can never report an obstacle collision -- that is still Gazebo-trial-only. This is an algorithm benchmark, not a substitute for the Gazebo trial.
 
 The committed equal-speed benchmark was regenerated with 10 seeds, 180-second limits, eight Runner behaviors, and both Catcher strategies: 160/160 cases captured. Mean capture time was 11.15 s for baseline and 13.72 s for predictive. These kinematic results validate termination and regression coverage; they do not rank the strategies under physical obstacles and sensor latency.
 
