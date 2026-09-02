@@ -7,6 +7,7 @@ class Pose2D:
     y: float = 0.0
     yaw: float = 0.0
     stamp: float = 0.0
+    feasible: bool = True
 
 @dataclass
 class Velocity2D:

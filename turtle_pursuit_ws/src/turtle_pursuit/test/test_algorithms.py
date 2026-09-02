@@ -106,8 +106,28 @@ def test_adversarial_runner_uses_deterministic_maneuvers():
 def test_aggressive_catcher_uses_pressure_mode():
     from turtle_pursuit.catcher.strategy import CatcherStrategy
     cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'chase_distance':1.6,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2}
-    strategy=CatcherStrategy(cfg); strategy.command(Pose2D(0.,0.),Pose2D(3.,0.),Velocity2D(.2,.1,.1),'aggressive')
+    strategy=CatcherStrategy(cfg)
+    # A genuine time-consistent intercept must exist within the horizon for
+    # PRESSURE to engage (self-arbitration falls back to CHASE otherwise); a
+    # slow, nearby Runner comfortably allows one.
+    strategy.command(Pose2D(0.,0.),Pose2D(1.5,0.),Velocity2D(.05,.02,.05),'aggressive')
     assert strategy.mode=='PRESSURE'
+
+def test_catcher_falls_back_to_chase_when_no_feasible_intercept_exists():
+    """When the CTRV search finds no real time-consistent intercept within the
+    horizon, trust the honest fallback (chase the Runner's current position)
+    instead of steering at an arbitrary extrapolated horizon-endpoint guess.
+
+    The trust switch is debounced (a few sustained infeasible reads, not one),
+    the same dwell-style fix used for FLANK, so a single flickered reading
+    against an oscillating Runner can't chatter the aim point tick to tick.
+    """
+    from turtle_pursuit.catcher.strategy import CatcherStrategy
+    cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'chase_distance':1.6,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2}
+    strategy=CatcherStrategy(cfg)
+    for _ in range(4):
+        strategy.command(Pose2D(0.,0.),Pose2D(3.,0.),Velocity2D(.2,.1,.1),'predictive')
+    assert strategy.mode=='CHASE' and strategy.target.x==3. and strategy.target.y==0.
 
 def test_predictive_catcher_flanks_a_shielding_runner_persistently():
     from turtle_pursuit.catcher.strategy import CatcherStrategy

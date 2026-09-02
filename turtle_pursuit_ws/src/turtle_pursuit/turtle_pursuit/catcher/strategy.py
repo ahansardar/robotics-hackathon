@@ -8,6 +8,7 @@ class CatcherStrategy:
         self.cfg=cfg; self.mode='SEARCH'; self.target=None
         self.flank_obstacle=None; self.flank_direction=0.0; self.detected_obstacles=[]
         self.flank_dwell_start=None; self.flank_committed_since=None; self.flank_cooldown_until=None
+        self.intercept_trust=1.0; self.trusting_intercept=True
     def set_obstacles(self,obstacles):
         self.detected_obstacles=list(obstacles)
     def speed_for_distance(self,distance_to_runner):
@@ -99,5 +100,26 @@ class CatcherStrategy:
                 confidence=floor+(1.-floor)*getattr(rv,'consistency',1.0)
                 horizon=self.cfg['prediction_horizon']*(1.25 if aggressive else 1.)*confidence
                 step=self.cfg['prediction_step']*(.5 if aggressive else 1.)
-                self.mode='PRESSURE' if aggressive else 'INTERCEPT'; target=interception_point(c,r,rv,adaptive_speed,horizon,step); speed=adaptive_speed
+                intercept=interception_point(c,r,rv,adaptive_speed,horizon,step)
+                # Self-arbitration: only steer at the forecast point if the
+                # search actually found a time-consistent convergence within
+                # the horizon. An infeasible result is just the horizon
+                # endpoint -- an extrapolation guess that can be worse than
+                # simply closing on where the Runner already is, which is
+                # exactly what let the plain baseline chase win several
+                # benchmark scenarios the forecast-trusting Catcher lost.
+                # Debounce the trust switch itself (a Schmitt trigger on a
+                # smoothed feasibility signal): flipping the aim point between
+                # the forecast and the raw current position every single tick
+                # against an oscillating Runner (e.g. `adversarial`) made the
+                # Catcher's own path chatter and cost time, exactly the same
+                # class of bug the FLANK dwell-gate fixed above.
+                self.intercept_trust += .4*((1.0 if intercept.feasible else 0.0)-self.intercept_trust)
+                if self.intercept_trust>=self.cfg.get('intercept_trust_high',.6): self.trusting_intercept=True
+                elif self.intercept_trust<=self.cfg.get('intercept_trust_low',.3): self.trusting_intercept=False
+                if self.trusting_intercept:
+                    target=intercept; self.mode='PRESSURE' if aggressive else 'INTERCEPT'
+                else:
+                    target=r; self.mode='CHASE'
+                speed=adaptive_speed
         self.target=target; return drive_to(c,target,speed,self.cfg['turn_gain'])
