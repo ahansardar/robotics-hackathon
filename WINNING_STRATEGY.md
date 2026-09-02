@@ -15,28 +15,29 @@ The software therefore optimizes two different outcomes:
 
 The competition Catcher is `predictive`; `aggressive` is its higher-pressure gauntlet variant.
 
-1. Estimate Runner world velocity and yaw rate with a bounded exponential moving average.
-2. Project curved motion with a constant-turn-rate-and-velocity model.
-3. Select the earliest intercept reachable at the current dynamic speed.
-4. Detect when the Runner is orbiting lidar-discovered cover.
-5. Commit to one flank direction around that obstacle instead of aiming through it.
+1. Estimate Runner world velocity and yaw rate with a bounded exponential moving average, and track how consistently that yaw rate has held direction (`turn_consistency`).
+2. Project curved motion with a constant-turn-rate-and-velocity model, using a forecast horizon scaled down when turn rate is inconsistent (a Runner reacting/juking rather than genuinely arcing).
+3. Trust the resulting intercept only if the search actually converged within that horizon; otherwise fall back to chasing the Runner's current position (the switch is debounced, not a per-tick flip).
+4. Detect when the Runner is genuinely lingering (not merely passing) near lidar-discovered cover, using a minimum dwell time.
+5. Commit to one flank direction around that obstacle instead of aiming through it, capped in duration with a cooldown so a Runner cannot bait an indefinite orbit.
 6. Near capture, match Runner speed plus a separation correction so the Catcher remains inside the capture radius for the required second.
 7. Pass every tactical target through live lidar corridor selection, boundary recovery, and command limiting.
 
-Success depends on prediction and positioning, not a configured speed advantage: Catcher and Runner share the same default 0.70 m/s ceiling.
+Success depends on prediction and positioning, not a configured speed advantage: Catcher and Runner share the same default 0.70 m/s ceiling. Measured on the kinematic benchmark, these changes cut `predictive`'s mean capture time from 13.72 s to 12.75 s and closed most (not all) of the gap to `baseline` on strategic/adversarial evasion -- see `docs/CATCHER_ALGORITHM.md` for the full before/after table.
 
 ## Runner strategy
 
 The canonical competition Runner is `competitive`, and the Runner gauntlet uses that same algorithm.
 
 1. Score escape headings using distance from the Catcher, open-space and boundary clearance, corner risk, heading continuity, and adversarial break value.
-2. Use immediate bidirectional motion so a favorable escape behind the robot does not require a slow in-place turn.
-3. Trigger high-priority `BREAKAWAY` behavior at close separation.
-4. Select cover only from obstacles detected by the Runner's own lidar map.
-5. Join a safe orbit around the chosen obstacle and retain it through sensor noise.
-6. Switch cover only after the current obstacle is genuinely lost and the replacement is materially better.
-7. Cruise while safe and smoothly boost as the Catcher enters the threat range.
-8. Replan every control cycle and let live lidar override unsafe tactical commands.
+2. Outside a safety-critical breakaway, hold a randomly-weighted choice among the top-scoring headings for a short window instead of always the single best one, so a deterministic policy cannot be fully predicted by an opponent simulating this same scoring function.
+3. Use immediate bidirectional motion so a favorable escape behind the robot does not require a slow in-place turn.
+4. Trigger high-priority `BREAKAWAY` behavior at close separation -- always the single best escape here, never the mixed-strategy choice.
+5. Select cover only from obstacles detected by the Runner's own lidar map.
+6. Join a safe orbit around the chosen obstacle and retain it through sensor noise.
+7. Switch cover only after the current obstacle is genuinely lost and the replacement is materially better.
+8. Cruise while safe and smoothly boost as the Catcher enters the threat range.
+9. Replan every control cycle and let live lidar override unsafe tactical commands.
 
 `SHIELD` means using an existing legal arena obstacle as cover. It adds no object or physics advantage.
 

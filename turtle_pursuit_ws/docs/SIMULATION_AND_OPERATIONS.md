@@ -109,15 +109,16 @@ colcon test-result --verbose
 bash scripts/run_benchmarks.sh 10 180
 ```
 
-Before accepting a controller change, also run at least one full-sensor Gazebo trial in a new random arena and replay any previously failing seed. Pure-Python benchmarks do not model wheel dynamics, render load, sensor latency, or physical collisions.
+Before accepting a controller change, also run at least one full-sensor Gazebo trial in a new random arena and replay any previously failing seed. Pure-Python benchmarks do not model wheel dynamics, render load, sensor latency, or obstacle collisions. They do measure Catcher/Runner body-contact transitions (separation crossing the combined ~0.34 m footprint radius) as the `collisions` benchmark column, which is a real signal, not a placeholder -- but it is still not a substitute for physical contact validated in Gazebo.
 
 Current release evidence:
 
 | Gate | Configuration | Result |
 |---|---|---|
-| unit and ROS tests | ROS 2 Jazzy package suite | 37 passed |
-| kinematic benchmark | 10 seeds × 8 Runner behaviors × 2 Catchers, 180 s | 160/160 captures |
-| Gazebo physics | seed 909, full sensors, aggressive vs competitive, equal 0.70 m/s ceilings | captured at 15.099 s; 0.352 m minimum; 0 collisions |
+| unit tests (pure Python, no ROS) | `test_algorithms.py` + `test_sensorless_description.py` | 45 passed |
+| ROS smoke test | requires `rclpy`, not independently re-run outside a ROS environment | last known: passed; unaffected by the algorithm changes below |
+| kinematic benchmark | 10 seeds × 8 Runner behaviors × 2 Catchers, 180 s | 160/160 captures, mean capture 11.32 s (baseline) / 12.75 s (predictive) |
+| Gazebo physics | seed 909, full sensors, aggressive vs competitive, equal 0.70 m/s ceilings | captured at 15.099 s; 0.352 m minimum; 0 collisions -- **predates** the turn-consistency/self-arbitration/flank-dwell changes; re-run before relying on this number |
 
 ## Known limitations
 

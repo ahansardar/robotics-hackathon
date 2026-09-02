@@ -46,6 +46,8 @@ y(t) = y₀ + vy × t
 
 For a measurable turn rate, the velocity vector is integrated along an arc.
 
+The estimator also tracks `turn_consistency`: the fraction of recent consecutive raw turn-rate samples that agree in sign. A genuinely arcing Runner keeps this near 1.0; a Runner reacting tick-to-tick (juking, evaluating a new escape heading every cycle) drives it toward 0.0. This is a lightweight read of *how the opponent is currently behaving*, used below to decide how far to trust the forecast.
+
 ## Open-space interception
 
 The predictor samples future Runner positions from the present to the configured horizon. It selects the earliest position satisfying:
@@ -54,23 +56,26 @@ The predictor samples future Runner positions from the present to the configured
 distance(Catcher, predicted Runner) / Catcher speed ≤ prediction time + tolerance
 ```
 
-The default predictive horizon is 4.0 seconds with a 0.2-second step. The target is replanned every control tick, so it adapts continuously rather than committing to a stale intercept.
+The default predictive horizon is 4.0 seconds with a 0.2-second step, but the *effective* horizon used each tick is scaled by `turn_consistency` (down to a configurable floor, default 0.25 of nominal). A constant-turn-rate forecast is only trustworthy while the turn rate is actually persisting in one direction; extrapolating a flip-flopping turn rate several seconds ahead sends the aim point further from the truth than a short-horizon guess would. The target is replanned every control tick, so it adapts continuously rather than committing to a stale intercept.
+
+**Self-arbitration.** The interception search itself reports whether it actually found a time-consistent convergence within the horizon (`feasible`), or exhausted the horizon without one and is just returning the endpoint as an extrapolation guess. The Catcher only steers at the forecast when it is feasible; an infeasible result falls back to `CHASE` (aiming directly at the Runner's current position) instead of trusting an arbitrary guess. The trust switch itself is debounced (a smoothed threshold, not a single-tick flip) so an oscillating Runner cannot make the aim point chatter between the two every cycle. `CHASE` is therefore not baseline-only: `predictive` and `aggressive` fall into it whenever the forecast is not currently trustworthy.
 
 ## Anti-shield flanking
 
-Direct interception cannot defeat persistent obstacle shielding. It creates an equilibrium: the Catcher approaches one side while the Runner remains opposite the obstacle. The Catcher therefore detects when the Runner is within 1.65 m of a lidar-mapped obstacle and switches to `FLANK`.
+Direct interception cannot defeat persistent obstacle shielding. It creates an equilibrium: the Catcher approaches one side while the Runner remains opposite the obstacle. The Catcher therefore detects when the Runner is within 1.65 m of a lidar-mapped obstacle and switches to `FLANK` -- but only after the Runner has lingered near that obstacle for a minimum dwell time (default 0.35 s), and it caps how long a single commitment may run (default 3.0 s) before giving up and cooling down (default 1.5 s). Triggering on raw single-tick proximity previously made the Catcher detour around any obstacle the Runner merely passed near while evading, which measurably cost several seconds against strategic/adversarial Runners; the dwell gate and cap fix that without reintroducing the original circular-orbit failure mode.
 
 The Catcher builds its own map; it does not receive the Runner's map or depend on cooperation from an opponent. Lidar hits are accumulated in a 0.15 m time-aware world grid, arena walls and the tracked Runner are filtered out, and compact connected components provide obstacle centers. Each beam clears free grid cells before its return, so moved or removed obstacles are erased as soon as lidar sees through their old location. A bounded 15-second history combines surfaces seen from different viewpoints for more accurate centers.
 
 The flank planner:
 
 1. Identifies the obstacle nearest the Runner.
-2. Measures the Catcher and Runner angles around that obstacle.
-3. Selects a clockwise or counter-clockwise direction using observed Runner angular motion, falling back to the shortest angular route.
-4. Retains that direction while the Runner uses the same obstacle.
-5. Places the next target 0.72 rad ahead on a 1.12 m orbit.
+2. Requires the Runner to have stayed within trigger range of that same obstacle for the dwell period before committing.
+3. Measures the Catcher and Runner angles around that obstacle.
+4. Selects a clockwise or counter-clockwise direction using observed Runner angular motion, falling back to the shortest angular route.
+5. Retains that direction while the Runner uses the same obstacle, and while the commitment stays under the max-duration cap.
+6. Places the next target 0.72 rad ahead on a 1.12 m orbit.
 
-Direction persistence prevents oscillation. Instead of pointing through the obstacle, the Catcher advances around it and uses its higher maximum speed to reduce angular separation. If the Runner abandons that obstacle, normal interception resumes or a new flank is initialized.
+Direction persistence prevents oscillation. Instead of pointing through the obstacle, the Catcher advances around it and uses its higher maximum speed to reduce angular separation. If the Runner abandons that obstacle, normal interception resumes or a new flank is initialized; if a single commitment runs past the cap, the Catcher gives up on it and cools down rather than orbiting indefinitely.
 
 ## Close-range capture controller
 
@@ -108,11 +113,16 @@ Default Catcher limits are:
 | Anti-shield trigger | 1.65 m |
 | Anti-shield orbit radius | 1.12 m |
 | Anti-shield angular step | 0.72 rad |
+| Anti-shield dwell (before committing) | 0.35 s |
+| Anti-shield max commitment duration | 3.0 s |
+| Anti-shield cooldown after giving up | 1.5 s |
+| Prediction confidence floor | 0.25 × nominal horizon |
+| Intercept-trust switch thresholds | high 0.60 / low 0.30 |
 | Obstacle-map resolution | 0.15 m |
-
-The Catcher selects speed continuously from distance: it cruises near the Runner for a stable capture hold and smoothly increases toward boost across longer open approaches. Target-heading error and live lidar corridor clearance reduce that request before the acceleration and hard-limit governor runs.
 | Lidar mapping range | 4.5 m |
 | Unobserved-cell upper TTL | 15.0 s (free rays clear sooner) |
+
+The Catcher selects speed continuously from distance: it cruises near the Runner for a stable capture hold and smoothly increases toward boost across longer open approaches. Target-heading error and live lidar corridor clearance reduce that request before the acceleration and hard-limit governor runs.
 
 Non-finite commands are rejected, velocity is clamped, and acceleration is rate-limited. Stale pose data or missing required sensors produces a zero command. A final pose-based boundary governor overrides pursuit and drives inward whenever the Catcher crosses the arena safety line.
 
@@ -120,11 +130,11 @@ Non-finite commands are rejected, velocity is clamped, and acceleration is rate-
 
 | Mode | Meaning |
 |---|---|
-| `INTERCEPT` | Curvature-aware open-space interception. |
-| `FLANK` | Persistent route around the Runner's shield obstacle. |
+| `INTERCEPT` | Curvature-aware open-space interception (forecast currently trusted). |
+| `FLANK` | Persistent route around the Runner's shield obstacle, once the dwell gate is satisfied. |
 | `CAPTURE` | Close-range control for completing the legal hold. |
-| `CHASE` | Direct pursuit used only by the baseline strategy. |
-| `PRESSURE` | Higher-resolution prediction used by the aggressive test strategy. |
+| `CHASE` | Direct pursuit at the Runner's current position -- used by the baseline strategy, and by `predictive`/`aggressive` whenever self-arbitration currently distrusts the forecast. |
+| `PRESSURE` | Higher-resolution prediction used by the aggressive test strategy (still subject to the same feasibility check). |
 | `*/GAP` | Adaptive navigator is following a selected open corridor. |
 | `*/RECOVERY` | Stall watchdog is reversing and changing its preferred side. |
 | `BOUNDARY_RETURN` | Final arena governor is driving inward. |
@@ -133,9 +143,20 @@ Non-finite commands are rejected, velocity is clamped, and acceleration is rate-
 
 ## Validated result
 
-Historical regression trials established curvature-aware capture and anti-shield flanking. The current equal-speed release gate used full sensors and random arena seed 909. The aggressive Catcher faced the unchanged canonical `competitive` Runner, completed a legal capture at 15.099 seconds, reached 0.352 m minimum separation, and recorded zero collisions. The seed, strategies, result JSON, and sensor profile must accompany future performance claims.
+Historical regression trials established curvature-aware capture and anti-shield flanking. The last full-sensor Gazebo gate used random arena seed 909: the aggressive Catcher faced the unchanged canonical `competitive` Runner, completed a legal capture at 15.099 seconds, reached 0.352 m minimum separation, and recorded zero collisions. The seed, strategies, result JSON, and sensor profile must accompany future performance claims.
 
-The result is stored locally at `/tmp/turtle_pursuit_canonical_duel_antishield.json`. It is a deterministic regression result for the current arena and seed, not a mathematical guarantee for unmodeled hardware disturbances or a different official arena.
+**This Gazebo number predates the turn-consistency-gated horizon, feasibility self-arbitration, and dwell-gated flanking described above** -- those were validated on the pure-Python kinematic benchmark only (see the table below and `SIMULATION_AND_OPERATIONS.md`), not yet re-run in Gazebo. Re-run this gate before relying on the 15.099 s figure again.
+
+| Kinematic benchmark (10 seeds, 180 s, 8 Runner behaviors) | Before these changes | After |
+|---|---:|---:|
+| Overall mean capture time, `predictive` | 13.72 s | 12.75 s |
+| `strategic`/`wall_aware`/`obstacle_weaving`, `predictive` | 20.17 s | 18.31 s |
+| `adversarial`, `predictive` | 22.33 s | 20.21 s |
+| `circular`, `predictive` (the original P0 fix) | 5.20 s | 5.20 s (unchanged) |
+
+`baseline` sits at 17.29 s / 11.09 s / 5.90 s on those same three rows -- the gap to `predictive` narrowed substantially but is not fully closed on `strategic`-family and `adversarial`. Full method and reasoning: see the repository's commit history for `catcher/strategy.py`, `tracking/velocity.py`, and `planning/interception.py`.
+
+The Gazebo result is stored locally at `/tmp/turtle_pursuit_canonical_duel_antishield.json`. It is a deterministic regression result for the current arena and seed, not a mathematical guarantee for unmodeled hardware disturbances or a different official arena.
 
 ## Implementation references
 

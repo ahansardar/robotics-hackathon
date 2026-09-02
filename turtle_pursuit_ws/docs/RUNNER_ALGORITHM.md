@@ -78,7 +78,13 @@ If shielding is unavailable, the competitive policy evaluates escape headings us
 - Radial separation under close threat.
 - Deterministic perpendicular feints when separation is safe.
 
-Inside the 1.15 m emergency distance, the candidate set is restricted to high-value breakaway directions. The mode becomes `BREAKAWAY`.
+Inside the 1.15 m emergency distance, the candidate set is restricted to high-value breakaway directions. The mode becomes `BREAKAWAY`, and heading selection is always the single best-scoring candidate -- no mixed strategy during a safety-critical escape.
+
+## Mixed-strategy heading selection
+
+Outside a breakaway, `strategic`/`adversarial`/`competitive` do not always take the single best-scoring heading. A fully deterministic evasion policy is fully exploitable by any opponent that can simulate this same scoring function, which is a real risk once Round 2 opponents converge on similar architectures. Instead, the Runner holds a randomly-weighted choice among the top-scoring candidates (default: top 3, weighted toward the best) for a short window (default 0.6 s) before re-rolling.
+
+The choice is held for that window rather than re-rolled every control tick on purpose: re-rolling every 50 ms produced motion indistinguishable from reactive juking to the Catcher's own turn-consistency signal (see `CATCHER_ALGORITHM.md`), which paradoxically made the Catcher *more* cautious, not less -- the two mechanisms interact, so this one commits to a choice for long enough to look like a genuine, if less-than-optimal, path segment rather than noise.
 
 ## Motion and safety limits
 
@@ -95,6 +101,8 @@ Default Runner limits are:
 | Arena half-width | 5.0 m |
 | Boundary margin | 0.55 m |
 | Shield radius | 1.05 m |
+| Mixed-strategy candidate pool | top 3 |
+| Mixed-strategy hold duration | 0.6 s |
 | Obstacle-map resolution | 0.15 m |
 | Lidar mapping range | 4.5 m |
 | Unobserved-cell upper TTL | 15.0 s (free rays clear sooner) |
@@ -120,7 +128,9 @@ The command limiter rejects non-finite values, clamps speed, and rate-limits acc
 
 ## Validation history
 
-Historical trials include both full-inning survival against an earlier direct-pressure Catcher and capture after the Catcher gained explicit anti-shield planning. In the current equal-speed full-sensor release gate on random arena seed 909, the unchanged canonical `competitive` Runner entered `SHIELD/RECOVERY`; the aggressive Catcher captured it at 15.099 seconds with 0.352 m minimum separation and zero collisions. This is an intentionally hard regression, not a claim that the Runner must win every matchup, and both gauntlets continue to use this same Runner algorithm.
+Historical trials include both full-inning survival against an earlier direct-pressure Catcher and capture after the Catcher gained explicit anti-shield planning. In the last full-sensor release gate on random arena seed 909, the unchanged canonical `competitive` Runner entered `SHIELD/RECOVERY`; the aggressive Catcher captured it at 15.099 seconds with 0.352 m minimum separation and zero collisions. This is an intentionally hard regression, not a claim that the Runner must win every matchup, and both gauntlets continue to use this same Runner algorithm.
+
+That Gazebo gate predates the mixed-strategy heading selection described above, which has only been validated on the pure-Python kinematic benchmark so far (see `CATCHER_ALGORITHM.md`'s validated-result table and `SIMULATION_AND_OPERATIONS.md`). Re-run the Gazebo gate before relying on the 15.099 s figure as current.
 
 ## Implementation references
 
