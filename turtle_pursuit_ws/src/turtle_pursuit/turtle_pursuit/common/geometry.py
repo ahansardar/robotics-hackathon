@@ -13,6 +13,7 @@ class Velocity2D:
     vx: float = 0.0
     vy: float = 0.0
     wz: float = 0.0
+    consistency: float = 1.0
 
 @dataclass
 class Command:

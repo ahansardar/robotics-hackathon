@@ -111,14 +111,38 @@ def test_aggressive_catcher_uses_pressure_mode():
 
 def test_predictive_catcher_flanks_a_shielding_runner_persistently():
     from turtle_pursuit.catcher.strategy import CatcherStrategy
-    cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2,'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'shield_obstacles':[2.,2.]}
+    cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2,'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'anti_shield_dwell':.35,'shield_obstacles':[2.,2.]}
     strategy=CatcherStrategy(cfg)
-    catcher=Pose2D(-1.5,0.); runner=Pose2D(1.5,1.)
-    strategy.command(catcher,runner,Velocity2D(.1,.2),'predictive')
+    strategy.command(Pose2D(-1.5,0.,0.,0.),Pose2D(1.5,1.,0.,0.),Velocity2D(.1,.2),'predictive')
+    assert strategy.mode!='FLANK'  # dwell not met yet: a single tick shouldn't cost a detour
+    strategy.command(Pose2D(-1.49,.01,0.,.4),Pose2D(1.51,.99,0.,.4),Velocity2D(.1,-.2),'predictive')
     direction=strategy.flank_direction
-    strategy.command(Pose2D(-1.49,.01),Pose2D(1.51,.99),Velocity2D(.1,-.2),'predictive')
+    assert strategy.mode=='FLANK'
+    strategy.command(Pose2D(-1.48,.02,0.,.42),Pose2D(1.52,.98,0.,.42),Velocity2D(.1,-.2),'predictive')
     assert strategy.mode=='FLANK' and strategy.flank_direction==direction
     assert abs(math.hypot(strategy.target.x-2.,strategy.target.y-2.)-1.12)<1e-8
+
+def test_flank_ignores_a_brief_pass_through_obstacle_proximity():
+    """Regression test: single-tick proximity to cover must not trigger a detour.
+
+    The old trigger fired on raw distance-to-obstacle alone, which made the
+    predictive Catcher measurably slower than the naive baseline chase against
+    strategic/adversarial Runners that merely pass near an obstacle while
+    evading (benchmark-confirmed: 20.2s vs 17.5s mean capture time).
+    """
+    cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2,'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'anti_shield_dwell':.35,'shield_obstacles':[2.,2.]}
+    strategy=CatcherStrategy(cfg)
+    strategy.command(Pose2D(-1.5,0.,0.,0.),Pose2D(1.5,1.,0.,0.),Velocity2D(.6,.6),'predictive')
+    assert strategy.mode!='FLANK'
+
+def test_flank_commitment_expires_and_cools_down():
+    cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2,'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'anti_shield_dwell':.1,'anti_shield_max_duration':.5,'anti_shield_cooldown':1.0,'shield_obstacles':[2.,2.]}
+    strategy=CatcherStrategy(cfg)
+    for stamp in (0.,.15,.3,.45,.6,.75):
+        strategy.command(Pose2D(-1.5,0.,0.,stamp),Pose2D(1.5,1.,0.,stamp),Velocity2D(.1,.2),'predictive')
+    assert strategy.mode!='FLANK'  # gave up after anti_shield_max_duration
+    strategy.command(Pose2D(-1.5,0.,0.,.9),Pose2D(1.5,1.,0.,.9),Velocity2D(.1,.2),'predictive')
+    assert strategy.mode!='FLANK'  # still inside the cooldown window
 
 def test_bidirectional_escape_reverses_immediately_when_facing_catcher():
     command=drive_to_bidirectional(Pose2D(1.5,0.,math.pi),Pose2D(3.,0.),.46,2.2)
@@ -175,9 +199,10 @@ def test_runner_rejects_wall_trap_when_open_shield_exists():
     assert strategy.shield_obstacle == (.8,2.1)
 
 def test_shield_and_flank_targets_never_leave_arena():
-    runner=CatcherStrategy({'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'arena_half':5.,'boundary_margin':.55})
+    runner=CatcherStrategy({'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'arena_half':5.,'boundary_margin':.55,'anti_shield_dwell':.35})
     runner.set_obstacles([(4.3,4.3)])
-    target=runner.shield_flank_target(Pose2D(3.5,4.2),Pose2D(4.2,4.2),Velocity2D())
+    runner.shield_flank_target(Pose2D(3.5,4.2,0.,0.),Pose2D(4.2,4.2,0.,0.),Velocity2D())
+    target=runner.shield_flank_target(Pose2D(3.5,4.2,0.,.4),Pose2D(4.2,4.2,0.,.4),Velocity2D())
     assert target is not None and abs(target.x)<=4.45 and abs(target.y)<=4.45
     evader=RunnerStrategy({'shield_radius':1.05,'arena_half':5.,'boundary_margin':.55})
     evader.set_obstacles([(-4.3,-4.3)])
@@ -214,7 +239,8 @@ def test_both_roles_use_dynamically_detected_obstacle_centers():
     assert runner_strategy.shield_target(Pose2D(-1.,0.),Pose2D(.8,-.5)) is not None
     catcher_cfg={'max_linear':.46,'prediction_horizon':4.,'prediction_step':.2,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2,'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'shield_obstacles':[]}
     catcher_strategy=CatcherStrategy(catcher_cfg); catcher_strategy.set_obstacles(detected)
-    catcher_strategy.command(Pose2D(-1.,0.),Pose2D(.8,-.5),Velocity2D(.1,.1),'predictive')
+    catcher_strategy.command(Pose2D(-1.,0.,0.,0.),Pose2D(.8,-.5,0.,0.),Velocity2D(.1,.1),'predictive')
+    catcher_strategy.command(Pose2D(-1.,0.,0.,.4),Pose2D(.8,-.5,0.,.4),Velocity2D(.1,.1),'predictive')
     assert catcher_strategy.mode=='FLANK'
 
 def test_lidar_mapper_expires_removed_obstacles_and_tracks_changes():

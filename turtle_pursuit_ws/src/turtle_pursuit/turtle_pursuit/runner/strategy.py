@@ -14,6 +14,7 @@ class RunnerStrategy:
     def __init__(self,cfg,seed=1):
         self.cfg=cfg; self.rng=random.Random(seed); self.heading=0.0; self.target=None; self.mode='EVADE'; self.waypoint=0
         self.shield_obstacle=None; self.detected_obstacles=[]
+        self.mixed_rank=0; self.mixed_strategy_until=None
         # Fixed organizer-style Round 1 course, clear of the four arena obstacles.
         self.standard_course=[Pose2D(3.6,0.0),Pose2D(3.6,3.6),Pose2D(0.0,3.6),Pose2D(-3.6,3.6),Pose2D(-3.6,0.0),Pose2D(-3.6,-3.6),Pose2D(0.0,-3.6),Pose2D(3.6,-3.6)]
     def set_obstacles(self,obstacles):
@@ -99,4 +100,29 @@ class RunnerStrategy:
                 score+=self.cfg.get('survival_radial_weight',3.5)*(1.+threat)*math.cos(normalize_angle(h-away))
                 if separation>=self.cfg.get('safe_feint_distance',2.6): score+=.45*math.cos(normalize_angle(h-break_heading))
             candidates.append((score,h,t))
-        _,self.heading,self.target=max(candidates,key=lambda x:x[0]); self.mode='BREAKAWAY' if (emergency or (strategy=='competitive' and separation<self.cfg.get('shield_commit_distance',3.2))) else ('COMPETITIVE' if strategy=='competitive' else ('ADVERSARIAL' if strategy=='adversarial' else ('STRATEGIC' if strategy=='strategic' else 'BASELINE'))); return drive_to_bidirectional(r,self.target,speed,self.cfg['turn_gain'])
+        breakaway=emergency or (strategy=='competitive' and separation<self.cfg.get('shield_commit_distance',3.2))
+        if advanced and not breakaway and len(candidates)>1:
+            # Mixed strategy: hold a randomly-chosen rank among the top-scoring
+            # candidates for a short window instead of always taking the single
+            # best one. A fully deterministic policy is fully exploitable by any
+            # opponent that can simulate this same scoring function (a real risk
+            # once Round 2 opponents converge on similar architectures). The
+            # choice is re-rolled only every `mixed_strategy_hold` seconds, not
+            # every control tick -- re-rolling every tick produced motion that
+            # was indistinguishable from reactive juking to the Catcher's own
+            # turn-consistency signal, which made the Catcher discount its
+            # prediction horizon far more than intended and cost it several
+            # seconds in benchmark testing. A held choice still changes the
+            # Runner's path direction discretely at each reroll, which is what
+            # actually defeats a predictive opponent.
+            now=r.stamp
+            if self.mixed_strategy_until is None or now>=self.mixed_strategy_until:
+                k=min(self.cfg.get('mixed_strategy_top_k',3),len(candidates))
+                self.mixed_rank=self.rng.choices(range(k),weights=list(range(k,0,-1)),k=1)[0]
+                self.mixed_strategy_until=now+self.cfg.get('mixed_strategy_hold',.6)
+            ranked=sorted(candidates,key=lambda x:x[0],reverse=True)
+            _,self.heading,self.target=ranked[min(self.mixed_rank,len(ranked)-1)]
+        else:
+            _,self.heading,self.target=max(candidates,key=lambda x:x[0])
+        self.mode='BREAKAWAY' if breakaway else ('COMPETITIVE' if strategy=='competitive' else ('ADVERSARIAL' if strategy=='adversarial' else ('STRATEGIC' if strategy=='strategic' else 'BASELINE')))
+        return drive_to_bidirectional(r,self.target,speed,self.cfg['turn_gain'])
