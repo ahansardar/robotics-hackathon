@@ -45,7 +45,8 @@ class AdaptiveNavigator:
     """Persistent, scan-driven gap selection with automatic stall recovery."""
     def __init__(self,cfg):
         self.cfg=cfg; self.heading=0.; self.last_yaw=None; self.preferred_side=1.
-        self.history=deque(); self.recovery_until=-1.
+        self.history=deque(); self.recovery_until=-1.; self.recovery_started=-1.
+        self.stall_cooldown_until=-1.
 
     def _clearance(self,heading,points):
         radius=self.cfg.get('navigator_robot_radius',.32)
@@ -86,12 +87,33 @@ class AdaptiveNavigator:
         if self.last_yaw is not None:self.heading=normalize_angle(self.heading-normalize_angle(pose.yaw-self.last_yaw))
         self.last_yaw=pose.yaw
 
-        if self._stalled(pose,now,abs(desired.linear),direct_clearance<influence):
-            self.preferred_side*=-1.; self.recovery_until=now+self.cfg.get('navigator_recovery_time',.9); self.history.clear()
+        if now>=self.stall_cooldown_until and self._stalled(pose,now,abs(desired.linear),direct_clearance<influence):
+            self.preferred_side*=-1.; self.recovery_started=now
+            self.recovery_until=now+self.cfg.get('navigator_recovery_time',1.2)
+            self.stall_cooldown_until=self.recovery_until+self.cfg.get('navigator_recovery_cooldown',1.5)
+            self.history.clear()
         if now<self.recovery_until:
+            stop=self.cfg.get('lidar_stop_distance',.65)
             rear=self._clearance(math.pi,points)
-            if rear>self.cfg.get('lidar_stop_distance',.65):return Command(-.16,1.35*self.preferred_side),'RECOVERY'
-            return Command(.12,-1.5*self.preferred_side),'RECOVERY'
+            if now-self.recovery_started<self.cfg.get('navigator_recovery_reverse_time',.35) and rear>stop:
+                speed=min(self.cfg.get('navigator_recovery_reverse_speed',.38),self.cfg.get('max_linear',.70))
+                return Command(-speed,1.45*self.preferred_side),'RECOVERY_REVERSE'
+            # Accelerate through the widest current body-width corridor instead
+            # of finishing recovery with a low-speed in-place turn.
+            samples=max(12,int(self.cfg.get('navigator_heading_samples',48)))
+            openings=[]
+            for index in range(samples):
+                heading=-math.pi+2.*math.pi*index/samples
+                clearance=self._clearance(heading,points)
+                alignment=abs(normalize_angle(heading-desired_heading))
+                openings.append((clearance-.18*alignment,clearance,heading))
+            _,clearance,escape=max(openings)
+            forward=abs(escape)<=math.pi/2
+            steering=escape if forward else normalize_angle(escape-math.copysign(math.pi,escape))
+            speed=min(self.cfg.get('navigator_recovery_escape_speed',.62),self.cfg.get('max_linear',.70))
+            clearance_scale=max(.3,min(1.,(clearance-stop)/max(.05,influence-stop)))
+            linear=speed*clearance_scale*max(.35,math.cos(steering)**2)*(1. if forward else -.8)
+            return Command(linear,self.cfg.get('turn_gain',2.2)*steering),'RECOVERY_ESCAPE'
 
         if direct_clearance>=influence:
             self.heading=desired_heading

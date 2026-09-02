@@ -19,10 +19,10 @@ class RunnerStrategy:
     def set_obstacles(self,obstacles):
         self.detected_obstacles=list(obstacles)
     def speed_for_separation(self,separation):
-        """Cruise when safe and progressively boost as the Catcher closes."""
-        emergency=self.cfg.get('emergency_escape_distance',1.15)
-        threat=max(emergency+.05,self.cfg.get('runner_boost_distance',3.0))
-        demand=(threat-separation)/(threat-emergency)
+        """Use full boost under direct threat, then taper smoothly to cruise."""
+        full=self.cfg.get('runner_full_boost_distance',3.2)
+        cruise=max(full+.05,self.cfg.get('runner_boost_distance',5.0))
+        demand=(cruise-separation)/(cruise-full)
         return dynamic_speed(self.cfg.get('cruise_linear',.44),self.cfg['max_linear'],demand)
     def shield_target(self,c,r):
         raw=self.cfg.get('shield_obstacles') or ()
@@ -31,7 +31,13 @@ class RunnerStrategy:
         # Prefer reachable cover that is not already controlled by the Catcher.
         # Keep that choice until it is genuinely lost: symmetric obstacles otherwise
         # make a noisy pose estimate flip the target and waste the Runner's speed.
-        score=lambda o:math.hypot(o[0]-c.x,o[1]-c.y)-self.cfg.get('shield_reach_weight',1.6)*math.hypot(o[0]-r.x,o[1]-r.y)
+        radius=self.cfg.get('shield_radius',1.05)
+        arena_limit=self.cfg.get('arena_half',5.)-self.cfg.get('boundary_margin',.55)
+        def score(o):
+            orbit_clearance=min(arena_limit-abs(o[0]),arena_limit-abs(o[1]))-radius
+            return (math.hypot(o[0]-c.x,o[1]-c.y)
+                    -self.cfg.get('shield_reach_weight',1.6)*math.hypot(o[0]-r.x,o[1]-r.y)
+                    +self.cfg.get('shield_open_weight',3.0)*max(-.5,orbit_clearance))
         best=max(obstacles,key=score)
         if self.shield_obstacle is not None:
             nearest=min(obstacles,key=lambda o:math.hypot(o[0]-self.shield_obstacle[0],o[1]-self.shield_obstacle[1]))
@@ -46,7 +52,6 @@ class RunnerStrategy:
             if current_lost and score(best)>score(current)+self.cfg.get('shield_switch_hysteresis',.75):
                 self.shield_obstacle=best
         ox,oy=self.shield_obstacle
-        radius=self.cfg.get('shield_radius',1.05)
         desired=math.atan2(oy-c.y,ox-c.x)
         runner_angle=math.atan2(r.y-oy,r.x-ox)
         runner_radius=math.hypot(r.x-ox,r.y-oy)
@@ -70,7 +75,7 @@ class RunnerStrategy:
             self.mode='STANDARDIZED'; return drive_to(r,self.target,min(self.cfg.get('cruise_linear',.44),self.cfg['max_linear']),self.cfg['turn_gain'])
         separation=math.hypot(r.x-c.x,r.y-c.y)
         speed=self.speed_for_separation(separation)
-        if strategy=='competitive':
+        if strategy=='competitive' and separation>=self.cfg.get('shield_commit_distance',3.2):
             self.target=self.shield_target(c,r)
             if self.target is not None:
                 self.mode='SHIELD'
@@ -94,4 +99,4 @@ class RunnerStrategy:
                 score+=self.cfg.get('survival_radial_weight',3.5)*(1.+threat)*math.cos(normalize_angle(h-away))
                 if separation>=self.cfg.get('safe_feint_distance',2.6): score+=.45*math.cos(normalize_angle(h-break_heading))
             candidates.append((score,h,t))
-        _,self.heading,self.target=max(candidates,key=lambda x:x[0]); self.mode='BREAKAWAY' if emergency else ('COMPETITIVE' if strategy=='competitive' else ('ADVERSARIAL' if strategy=='adversarial' else ('STRATEGIC' if strategy=='strategic' else 'BASELINE'))); return drive_to_bidirectional(r,self.target,speed,self.cfg['turn_gain'])
+        _,self.heading,self.target=max(candidates,key=lambda x:x[0]); self.mode='BREAKAWAY' if (emergency or (strategy=='competitive' and separation<self.cfg.get('shield_commit_distance',3.2))) else ('COMPETITIVE' if strategy=='competitive' else ('ADVERSARIAL' if strategy=='adversarial' else ('STRATEGIC' if strategy=='strategic' else 'BASELINE'))); return drive_to_bidirectional(r,self.target,speed,self.cfg['turn_gain'])

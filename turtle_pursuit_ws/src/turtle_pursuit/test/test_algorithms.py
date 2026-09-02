@@ -39,10 +39,10 @@ def test_dynamic_speed_is_smooth_and_bounded():
     assert .44<dynamic_speed(.44,.70,.5)<.70
 
 def test_runner_boosts_as_catcher_closes():
-    cfg={'max_linear':.70,'cruise_linear':.44,'runner_boost_distance':3.,'emergency_escape_distance':1.15}
+    cfg={'max_linear':.70,'cruise_linear':.44,'runner_full_boost_distance':3.2,'runner_boost_distance':5.}
     strategy=RunnerStrategy(cfg)
-    assert strategy.speed_for_separation(1.0)==.70
-    assert strategy.speed_for_separation(2.0)>strategy.speed_for_separation(4.0)
+    assert strategy.speed_for_separation(3.0)==.70
+    assert strategy.speed_for_separation(4.0)>strategy.speed_for_separation(6.0)
 
 def test_catcher_boosts_over_open_distance():
     cfg={'max_linear':.70,'cruise_linear':.44,'catcher_cruise_distance':1.,'catcher_boost_distance':3.5}
@@ -145,18 +145,34 @@ def test_adaptive_navigator_recovers_from_a_detected_stall():
     for index in range(170,191):ranges[index]=.55
     for stamp in (0.,.45,.9):
         command,mode=navigator.command(Command(.4,0.),Pose2D(stamp=stamp),ranges,-math.pi,2*math.pi/360,target_bearing=0.,now=stamp)
-    assert mode=='RECOVERY' and command.linear!=0.
+    assert mode.startswith('RECOVERY_') and abs(command.linear)>=.1
+
+def test_adaptive_navigator_recovery_has_a_reentry_cooldown():
+    cfg={'max_linear':.70,'turn_gain':2.2,'lidar_stop_distance':.65,'lidar_influence_distance':1.35,'navigator_stall_window':1.,'navigator_stall_distance':.06,'navigator_recovery_time':.4,'navigator_recovery_cooldown':1.5}
+    navigator=AdaptiveNavigator(cfg); ranges=[float('inf')]*360
+    for index in range(170,191):ranges[index]=.7
+    for stamp in (0.,.45,.9):
+        _,mode=navigator.command(Command(.5,0.),Pose2D(stamp=stamp),ranges,-math.pi,2*math.pi/360,target_bearing=0.,now=stamp)
+    assert mode.startswith('RECOVERY_')
+    _,mode=navigator.command(Command(.5,0.),Pose2D(stamp=1.4),ranges,-math.pi,2*math.pi/360,target_bearing=0.,now=1.4)
+    assert not mode.startswith('RECOVERY_')
 
 def test_competitive_runner_prioritizes_radial_escape_under_threat():
     cfg={'max_linear':.46,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35,'emergency_escape_distance':1.15,'adversarial_break_weight':.9,'adversarial_interval':.8,'survival_radial_weight':3.5,'safe_feint_distance':2.6,'shield_radius':1.05,'shield_obstacles':[-2.,2.,2.,2.,-2.,-2.,2.,-2.]}
     strategy=RunnerStrategy(cfg,seed=1); catcher=Pose2D(-1.,0.); runner=Pose2D(1.,0.,math.pi,1.)
     command=strategy.command(catcher,runner,'competitive')
-    assert strategy.mode=='SHIELD' and command.linear<0
+    assert strategy.mode=='BREAKAWAY' and command.linear<0
 
 def test_shield_target_stays_outside_obstacle_and_opposes_catcher():
     cfg={'shield_radius':1.05,'shield_obstacles':[2.,2.]}; strategy=RunnerStrategy(cfg); catcher=Pose2D(-2.,2.); runner=Pose2D(2.,.9)
     target=strategy.shield_target(catcher,runner)
     assert abs(math.hypot(target.x-2.,target.y-2.)-1.05)<1e-8 and target.x>2.
+
+def test_runner_rejects_wall_trap_when_open_shield_exists():
+    cfg={'shield_radius':1.05,'shield_reach_weight':1.6,'shield_open_weight':3.,'arena_half':5.,'boundary_margin':.55}
+    strategy=RunnerStrategy(cfg); strategy.set_obstacles([(3.4,0.),(.8,2.1)])
+    strategy.shield_target(Pose2D(-1.5,0.),Pose2D(1.5,0.))
+    assert strategy.shield_obstacle == (.8,2.1)
 
 def test_shield_and_flank_targets_never_leave_arena():
     runner=CatcherStrategy({'anti_shield_trigger':1.65,'anti_shield_radius':1.12,'anti_shield_step':.72,'arena_half':5.,'boundary_margin':.55})
