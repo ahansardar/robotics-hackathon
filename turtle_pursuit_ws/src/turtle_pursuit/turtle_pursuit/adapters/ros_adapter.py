@@ -1,20 +1,25 @@
+import math
 from dataclasses import dataclass
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from rclpy.qos import qos_profile_sensor_data
-from turtle_pursuit.common.geometry import Pose2D, Velocity2D, quaternion_to_yaw, Command
+from turtle_pursuit.common.geometry import Pose2D, Velocity2D, normalize_angle, quaternion_to_yaw, Command
 from turtle_pursuit.perception.camera import detect_colored_target, detection_to_world
 
 @dataclass
 class Observation:
     pose: Pose2D = None; velocity: Velocity2D = None; received: float = 0.0
+    # Last time this pose came from privileged sim ground truth, kept separate from
+    # `received` so a wheel-odometry/camera fallback knows when it is safe to take over.
+    gt_received: float = -1.0
 
 class RosStateAdapter:
     """Replaceable ROS adapter. Algorithms only consume Pose2D/Velocity2D/scan tuples."""
     def __init__(self,node):
         self.node=node; self.catcher=Observation(); self.runner=Observation(); self.scan=None
         self.camera_received=0.0; self.camera_detection=None; self._color=None; self._depth=None; self._camera_info=None
+        self._spawn={}; self._gt_timeout={}; self._odom_fallback_active={}
         defaults={
             'catcher_pose_topic':'/catcher/sim_ground_truth_pose',
             'runner_pose_topic':'/runner/sim_ground_truth_pose',
@@ -44,10 +49,35 @@ class RosStateAdapter:
         self.node.create_subscription(Image,self.topics[f'{observer_role}_color_topic'],lambda m:self._image(m,observer_role,target_role),qos_profile_sensor_data)
         self.node.create_subscription(Image,self.topics[f'{observer_role}_depth_topic'],self._depth_image,qos_profile_sensor_data)
         self.node.create_subscription(CameraInfo,self.topics[f'{observer_role}_camera_info_topic'],self._camera_information,qos_profile_sensor_data)
+    def enable_self_odometry_fallback(self,role,spawn_x,spawn_y,spawn_yaw,ground_truth_timeout=1.0,odom_topic=None):
+        """Keep this robot's own pose alive from wheel odometry if privileged sim
+        ground truth is never published or goes stale mid-match, instead of the
+        node silently freezing. Odometry starts at (0,0,0) in its own frame, so we
+        compose it with the robot's known arena spawn pose (a fixed, one-time
+        transform) to recover a world-frame estimate."""
+        self._spawn[role]=Pose2D(spawn_x,spawn_y,spawn_yaw,0.0); self._gt_timeout[role]=ground_truth_timeout
+        topic=odom_topic or f'/{role}/odom'
+        self.node.create_subscription(Odometry,topic,lambda m:self._self_odom(m,role),qos_profile_sensor_data)
     def _odom(self,m,o):
         p=m.pose.pose.position; q=m.pose.pose.orientation; t=self.now()
         o.pose=Pose2D(p.x,p.y,quaternion_to_yaw(q.x,q.y,q.z,q.w),t)
-        o.velocity=Velocity2D(m.twist.twist.linear.x,m.twist.twist.linear.y,m.twist.twist.angular.z); o.received=t
+        o.velocity=Velocity2D(m.twist.twist.linear.x,m.twist.twist.linear.y,m.twist.twist.angular.z); o.received=t; o.gt_received=t
+    def _self_odom(self,m,role):
+        obs=getattr(self,role); now=self.now()
+        if now-obs.gt_received<=self._gt_timeout.get(role,1.0):
+            return  # Ground truth is fresh; it is more accurate than integrated wheel odometry.
+        if not self._odom_fallback_active.get(role,False):
+            self._odom_fallback_active[role]=True
+            self.node.get_logger().warn(f'{role}: sim_ground_truth_pose unavailable/stale, self-localizing from wheel odometry instead')
+        spawn=self._spawn[role]
+        p=m.pose.pose.position; q=m.pose.pose.orientation
+        local_yaw=quaternion_to_yaw(q.x,q.y,q.z,q.w)
+        cos_s,sin_s=math.cos(spawn.yaw),math.sin(spawn.yaw)
+        world_yaw=normalize_angle(spawn.yaw+local_yaw)
+        obs.pose=Pose2D(spawn.x+p.x*cos_s-p.y*sin_s,spawn.y+p.x*sin_s+p.y*cos_s,world_yaw,now)
+        vx,vy,wz=m.twist.twist.linear.x,m.twist.twist.linear.y,m.twist.twist.angular.z
+        obs.velocity=Velocity2D(vx*math.cos(world_yaw)-vy*math.sin(world_yaw),vx*math.sin(world_yaw)+vy*math.cos(world_yaw),wz)
+        obs.received=now
     def _scan(self,m): self.scan=(list(m.ranges),m.angle_min,m.angle_increment,self.now())
     def _depth_image(self,m): self._depth=m
     def _camera_information(self,m): self._camera_info=m
@@ -65,7 +95,10 @@ class RosStateAdapter:
         # very first detection, when there is no prior pose to check against.
         estimate=detection_to_world(observer.pose,self.camera_detection,previous=target.pose,max_speed=1.6)
         now=self.now()
-        if estimate is not None and (target.pose is None or now-target.received>.25):
+        # Ground truth (if present and fresh) stays authoritative for the opponent too;
+        # camera detection is what keeps tracking alive once it is not.
+        ground_truth_fresh=now-target.gt_received<=self._gt_timeout.get(target_role,1.0)
+        if estimate is not None and not ground_truth_fresh and (target.pose is None or now-target.received>.25):
             estimate.stamp=now; target.pose=estimate; target.received=now
     def now(self): return self.node.get_clock().now().nanoseconds*1e-9
     def get_catcher_pose(self): return self.catcher.pose

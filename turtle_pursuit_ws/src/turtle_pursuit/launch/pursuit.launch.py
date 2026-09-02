@@ -9,6 +9,11 @@ from launch.substitutions import EqualsSubstitution, LaunchConfiguration, NotEqu
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+# Single source of truth for spawn pose, shared by the Gazebo spawn call and the
+# self-odometry fallback's spawn_x/y/yaw parameters so they can never drift apart.
+CATCHER_SPAWN = ('-1.5', '0.0', '0.0')
+RUNNER_SPAWN = ('1.5', '0.0', '3.14159')
+
 def generate_launch_description():
     tb=get_package_share_directory('turtlebot4_gz_bringup'); desc=get_package_share_directory('turtlebot4_description'); irobot=get_package_share_directory('irobot_create_description'); gz=get_package_share_directory('ros_gz_sim'); pkg=get_package_share_directory('turtle_pursuit')
     world=LaunchConfiguration('world'); world_name=LaunchConfiguration('world_name'); headless=LaunchConfiguration('headless'); rviz=LaunchConfiguration('rviz'); dashboard=LaunchConfiguration('dashboard'); scenario=LaunchConfiguration('scenario'); sensors=LaunchConfiguration('sensors'); seed=LaunchConfiguration('seed'); duration=LaunchConfiguration('match_duration'); cstrategy=LaunchConfiguration('catcher_strategy'); rstrategy=LaunchConfiguration('runner_strategy'); result=LaunchConfiguration('result_file'); catcher_speed=LaunchConfiguration('catcher_max_linear'); runner_speed=LaunchConfiguration('runner_max_linear')
@@ -21,8 +26,10 @@ def generate_launch_description():
     clock=Node(package='ros_gz_bridge',executable='parameter_bridge',name='clock_bridge',arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'])
     sensor_required=ParameterValue(NotEqualsSubstitution(sensors,'stable'),value_type=bool)
     camera_required=ParameterValue(EqualsSubstitution(sensors,'full'),value_type=bool)
-    nodes=[Node(package='turtle_pursuit',executable='catcher',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'strategy':cstrategy,'max_linear':ParameterValue(catcher_speed,value_type=float),'require_lidar':sensor_required,'require_camera':camera_required}]),Node(package='turtle_pursuit',executable='runner',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'strategy':rstrategy,'seed':ParameterValue(seed,value_type=int),'max_linear':ParameterValue(runner_speed,value_type=float),'require_lidar':sensor_required,'require_camera':camera_required}]),Node(package='turtle_pursuit',executable='evaluator',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'match_duration':ParameterValue(duration,value_type=float),'result_file':result}]),Node(package='rviz2',executable='rviz2',condition=IfCondition(rviz))]
+    catcher_spawn_params={'spawn_x':float(CATCHER_SPAWN[0]),'spawn_y':float(CATCHER_SPAWN[1]),'spawn_yaw':float(CATCHER_SPAWN[2])}
+    runner_spawn_params={'spawn_x':float(RUNNER_SPAWN[0]),'spawn_y':float(RUNNER_SPAWN[1]),'spawn_yaw':float(RUNNER_SPAWN[2])}
+    nodes=[Node(package='turtle_pursuit',executable='catcher',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'strategy':cstrategy,'max_linear':ParameterValue(catcher_speed,value_type=float),'require_lidar':sensor_required,'require_camera':camera_required,**catcher_spawn_params}]),Node(package='turtle_pursuit',executable='runner',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'strategy':rstrategy,'seed':ParameterValue(seed,value_type=int),'max_linear':ParameterValue(runner_speed,value_type=float),'require_lidar':sensor_required,'require_camera':camera_required,**runner_spawn_params}]),Node(package='turtle_pursuit',executable='evaluator',parameters=[os.path.join(pkg,'config','pursuit.yaml'),{'match_duration':ParameterValue(duration,value_type=float),'result_file':result}]),Node(package='rviz2',executable='rviz2',condition=IfCondition(rviz))]
     delayed=TimerAction(period=LaunchConfiguration('startup_delay'),actions=nodes)
     dashboard_node=Node(package='turtle_pursuit',executable='dashboard',parameters=[{'scenario':scenario}],condition=IfCondition(dashboard),output='screen')
-    runner_spawn=TimerAction(period=15.0,actions=[robot('runner','1.5','0.0','3.14159')])
-    return LaunchDescription(args+[resource,gz_head,gz_gui,robot('catcher','-1.5','0.0','0.0'),runner_spawn,clock,dashboard_node,delayed])
+    runner_spawn=TimerAction(period=15.0,actions=[robot('runner',*RUNNER_SPAWN)])
+    return LaunchDescription(args+[resource,gz_head,gz_gui,robot('catcher',*CATCHER_SPAWN),runner_spawn,clock,dashboard_node,delayed])
