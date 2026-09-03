@@ -35,6 +35,8 @@
     adversarial_interval: 0.80
     survival_radial_weight: 3.50
     safe_feint_distance: 2.60
+    mixed_strategy_top_k: 3
+    mixed_strategy_hold: 0.6
     shield_radius: 1.05
     shield_reach_weight: 1.60
     shield_open_weight: 3.00
@@ -76,6 +78,12 @@
     anti_shield_trigger: 1.65
     anti_shield_radius: 1.12
     anti_shield_step: 0.72
+    anti_shield_dwell: 0.35
+    anti_shield_max_duration: 3.0
+    anti_shield_cooldown: 1.5
+    prediction_confidence_floor: 0.25
+    intercept_trust_high: 0.6
+    intercept_trust_low: 0.3
     flank_association_distance: 0.75
     flank_angular_velocity_threshold: 0.08
     planning_resolution: 0.20

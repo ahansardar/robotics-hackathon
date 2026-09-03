@@ -1,6 +1,7 @@
-import math, tempfile
+import math, re, tempfile
 from pathlib import Path
 import struct
+import yaml
 from types import SimpleNamespace
 from turtle_pursuit.common.geometry import Pose2D, Velocity2D, normalize_angle, quaternion_to_yaw
 from turtle_pursuit.tracking.velocity import VelocityEstimator
@@ -51,6 +52,29 @@ def test_catcher_boosts_over_open_distance():
     assert strategy.speed_for_distance(2.)>strategy.speed_for_distance(.8)
 def test_config_loading():
     p=Path(tempfile.mktemp()); p.write_text('control: {}\nmatch: {}\n'); assert load_config(p)=={'control':{},'match':{}}; p.unlink()
+
+def test_every_cfg_key_is_declared_somewhere():
+    """Every self.cfg.get('key'...)/self.cfg['key'] in the package must be
+    declared in catcher/node.py, runner/node.py, or config/pursuit.yaml --
+    otherwise a ROS parameter override for it is silently ignored and the
+    code always falls back to its hardcoded default no matter what the yaml
+    says. Caught this exact bug twice by hand (mixed_strategy_top_k/hold on
+    the Runner, six anti_shield_*/intercept_trust_*/prediction_confidence_floor
+    keys on the Catcher) before adding this as a permanent, automatic guard."""
+    import turtle_pursuit.catcher.node as catcher_node_module
+    pkg_root=Path(catcher_node_module.__file__).resolve().parent.parent
+    pursuit_dir=pkg_root.parent
+    referenced=set()
+    for py_file in pkg_root.rglob('*.py'):
+        text=py_file.read_text(encoding='utf-8')
+        referenced.update(re.findall(r"cfg\.get\('([a-z_]+)'", text))
+        referenced.update(re.findall(r"cfg\['([a-z_]+)'\]", text))
+    catcher_node_text=(pkg_root/'catcher'/'node.py').read_text(encoding='utf-8')
+    runner_node_text=(pkg_root/'runner'/'node.py').read_text(encoding='utf-8')
+    yaml_keys=set(yaml.safe_load((pursuit_dir/'config'/'pursuit.yaml').read_text(encoding='utf-8'))['/**']['ros__parameters'].keys())
+    missing=sorted(k for k in referenced
+                   if f"'{k}'" not in catcher_node_text and f"'{k}'" not in runner_node_text and k not in yaml_keys)
+    assert not missing,f'declared nowhere (silently stuck at hardcoded default): {missing}'
 
 def test_standardized_runner_follows_fixed_course():
     cfg={'max_linear':.34,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.,'open_weight':1.,'smooth_weight':1.}
