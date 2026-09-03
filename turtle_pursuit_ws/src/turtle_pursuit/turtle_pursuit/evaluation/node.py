@@ -19,7 +19,17 @@ class EvaluatorNode(Node):
         if active and not self.bump[role]: self.collisions+=1
         self.bump[role]=active
     def tick(self):
-        if self.done or self.adapter.stale(self.get_parameter('stale_timeout').value): return
+        if self.done: return
+        if self.adapter.stale(self.get_parameter('stale_timeout').value):
+            # An observability gap means we cannot verify the hold stayed
+            # continuous through it (RULEBOOK.md requires an unbroken 1.0s
+            # hold) -- the Runner could have escaped past the capture radius
+            # and come back entirely inside the gap. Invalidate any accruing
+            # hold rather than silently trusting it, which could otherwise
+            # award a capture the instant tracking resumes based purely on
+            # elapsed wall-clock time, not on anything actually observed.
+            self.detector.entered=None
+            return
         now=self.adapter.now(); c=self.adapter.get_catcher_pose(); r=self.adapter.get_runner_pose()
         if self.start is None: self.start=now; self.last_c=c; self.last_r=r
         elapsed=now-self.start; sep=distance(c,r); self.minimum=min(self.minimum,sep)

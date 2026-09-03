@@ -5,6 +5,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CameraInfo, Image
 from turtle_pursuit.catcher.node import CatcherNode
 from turtle_pursuit.runner.node import RunnerNode
+from turtle_pursuit.evaluation.node import EvaluatorNode
+from turtle_pursuit.common.geometry import Pose2D
 
 def test_controller_nodes_start_and_publish_finite_zero_when_stale():
     rclpy.init()
@@ -64,3 +66,43 @@ def test_opponent_pose_falls_back_to_marker_detection_without_ground_truth():
         assert belief is not None and abs(belief.x-0.5)<0.05 and abs(belief.y)<0.05
     finally:
         catcher.destroy_node(); rclpy.shutdown()
+
+def test_evaluator_invalidates_capture_hold_across_a_stale_observability_gap():
+    """RULEBOOK.md requires an UNBROKEN 1.0s hold inside the 0.5m capture
+    radius. If the evaluator's own pose tracking goes stale for a moment (a
+    ground-truth/sensor hiccup), it must not silently trust that the hold
+    stayed continuous through the gap it couldn't observe -- the Runner could
+    have escaped past the radius and come back entirely inside the blind
+    spot. Confirmed this was previously possible: a partial pre-gap hold plus
+    an unobserved escape-and-return produced a false CAPTURED result the
+    instant tracking resumed, purely from elapsed wall-clock time."""
+    rclpy.init()
+    node=EvaluatorNode()
+    try:
+        fake_now=[0.0]; fake_stale=[False]
+        node.adapter.now=lambda:fake_now[0]
+        node.adapter.stale=lambda timeout:fake_stale[0]
+        node.adapter.catcher.pose=Pose2D(0.,0.,0.,0.)
+        node.adapter.runner.pose=Pose2D(0.3,0.,0.,0.)  # within the 0.5m radius
+
+        fake_now[0]=0.3; node.tick()
+        assert node.detector.entered==0.3 and not node.done
+
+        fake_stale[0]=True
+        node.adapter.runner.pose=Pose2D(2.0,0.,0.,0.)  # escapes, unobserved
+        fake_now[0]=1.0; node.tick()
+        assert node.detector.entered is None  # the gap must invalidate the accruing hold
+
+        node.adapter.runner.pose=Pose2D(0.3,0.,0.,0.)  # back within radius, still stale
+        fake_now[0]=2.0; node.tick()
+        fake_stale[0]=False
+        fake_now[0]=2.0; node.tick()
+        assert not node.done  # must NOT award a capture based on the unobserved gap
+
+        # A genuinely continuous, fully-observed hold afterward must still capture.
+        fake_now[0]=2.05; node.tick()
+        fake_now[0]=2.5; node.tick()
+        fake_now[0]=3.05; node.tick()
+        assert node.done
+    finally:
+        node.destroy_node(); rclpy.shutdown()
