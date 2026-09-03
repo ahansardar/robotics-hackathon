@@ -41,8 +41,8 @@ class RosStateAdapter:
         self.runner_pub=node.create_publisher(TwistStamped,self.topics['runner_cmd_topic'],10)
         # The installed TurtleBot simulator publishes global Gazebo truth here.
         # Swap these subscriptions for odometry/perception in a competition adapter.
-        node.create_subscription(Odometry,self.topics['catcher_pose_topic'],lambda m:self._odom(m,self.catcher),qos_profile_sensor_data)
-        node.create_subscription(Odometry,self.topics['runner_pose_topic'],lambda m:self._odom(m,self.runner),qos_profile_sensor_data)
+        node.create_subscription(Odometry,self.topics['catcher_pose_topic'],lambda m:self._odom(m,self.catcher,'catcher'),qos_profile_sensor_data)
+        node.create_subscription(Odometry,self.topics['runner_pose_topic'],lambda m:self._odom(m,self.runner,'runner'),qos_profile_sensor_data)
     def subscribe_scan(self, role):
         self.node.create_subscription(LaserScan,self.topics[f'{role}_scan_topic'],self._scan,qos_profile_sensor_data)
     def subscribe_camera(self, observer_role, target_role):
@@ -58,10 +58,17 @@ class RosStateAdapter:
         self._spawn[role]=Pose2D(spawn_x,spawn_y,spawn_yaw,0.0); self._gt_timeout[role]=ground_truth_timeout
         topic=odom_topic or f'/{role}/odom'
         self.node.create_subscription(Odometry,topic,lambda m:self._self_odom(m,role),qos_profile_sensor_data)
-    def _odom(self,m,o):
+    def _odom(self,m,o,role=None):
         p=m.pose.pose.position; q=m.pose.pose.orientation; t=self.now()
         o.pose=Pose2D(p.x,p.y,quaternion_to_yaw(q.x,q.y,q.z,q.w),t)
         o.velocity=Velocity2D(m.twist.twist.linear.x,m.twist.twist.linear.y,m.twist.twist.angular.z); o.received=t; o.gt_received=t
+        # Mirror image of the warning in _self_odom: without this, a ground-truth
+        # flicker (drop, recover, drop again) only ever logs its first occurrence,
+        # since the fallback-active flag was otherwise write-only. Log recovery
+        # and clear the flag so a second degradation later in the match logs again.
+        if role is not None and self._odom_fallback_active.get(role,False):
+            self._odom_fallback_active[role]=False
+            self.node.get_logger().warn(f'{role}: sim_ground_truth_pose recovered, back to ground-truth localization')
     def _self_odom(self,m,role):
         obs=getattr(self,role); now=self.now()
         if now-obs.gt_received<=self._gt_timeout.get(role,1.0):
@@ -109,8 +116,18 @@ class RosStateAdapter:
     def get_scan(self, timeout=1.0):
         return self.scan if self.scan is not None and self.now()-self.scan[3] <= timeout else None
     def camera_fresh(self, timeout=1.0): return self.camera_received>0 and self.now()-self.camera_received<=timeout
+    def pose_stale(self, role, timeout):
+        """Per-role freshness check. Lets a caller distinguish "I don't know
+        where I am" (genuinely unsafe to command any motion) from "I don't
+        currently know where my opponent is" (should keep operating on the
+        best available -- possibly aged -- estimate rather than freezing;
+        a robot still moving has some chance of reacquiring its target or
+        continuing sensible evasion, a frozen one has none). `stale()` below
+        keeps its existing both-roles semantics unchanged for the evaluator."""
+        obs=getattr(self,role); n=self.now()
+        return obs.pose is None or n-obs.received>timeout
     def stale(self, timeout):
-        n=self.now(); return not self.catcher.pose or not self.runner.pose or n-self.catcher.received>timeout or n-self.runner.received>timeout
+        return self.pose_stale('catcher',timeout) or self.pose_stale('runner',timeout)
     def _twist(self,c):
         m=TwistStamped(); m.header.stamp=self.node.get_clock().now().to_msg(); m.header.frame_id='base_link'; m.twist.linear.x=float(c.linear); m.twist.angular.z=float(c.angular); return m
     def send_catcher_velocity(self,c): self.catcher_pub.publish(self._twist(c))

@@ -22,14 +22,24 @@ class RunnerNode(Node):
         scan=self.adapter.get_scan(self.get_parameter('sensor_timeout').value)
         grace=now-self.sensor_started<self.get_parameter('sensor_startup_grace').value
         sensor_fault=not grace and ((self.get_parameter('require_lidar').value and scan is None) or (self.get_parameter('require_camera').value and not self.adapter.camera_fresh(self.get_parameter('sensor_timeout').value)))
+        stale_timeout=self.cfg['stale_timeout']
         if sensor_fault: cmd=Command(); mode='SENSOR_FAULT'
-        elif self.adapter.stale(self.cfg['stale_timeout']): cmd=Command(); mode='WAITING'
+        elif self.adapter.pose_stale('runner',stale_timeout) or self.adapter.get_catcher_pose() is None:
+            # Can't safely command anything without knowing our own pose, or any
+            # estimate at all of where the Catcher is (nothing to evade yet).
+            cmd=Command(); mode='WAITING'
         else:
             catcher=self.adapter.get_catcher_pose(); runner=self.adapter.get_runner_pose()
             if scan:
                 centers=self.mapper.update(runner,*scan[:3],exclude=(catcher,),stamp=scan[3]); self.strategy.set_obstacles(centers)
                 message=String(); message.data=json.dumps({'stamp':scan[3],'centers':centers}); self.obstacle_pub.publish(message)
             cmd=self.strategy.command(catcher,runner,self.get_parameter('strategy').value); mode=self.strategy.mode
+            # We do have a Catcher estimate (checked above) but it may be aged --
+            # e.g. camera lost the marker and ground truth isn't available. Keep
+            # evading based on the last known threat position instead of freezing
+            # (a stationary Runner is the single worst thing it can be), but flag
+            # it so this is visible in telemetry.
+            if self.adapter.pose_stale('catcher',stale_timeout): mode=f'{mode}/STALE_TARGET'
             if scan and self.strategy.target is not None:
                 target=self.strategy.target; bearing=normalize_angle(math.atan2(target.y-runner.y,target.x-runner.x)-runner.yaw)
                 # Exclude the Catcher's own body from local obstacle avoidance, mirroring

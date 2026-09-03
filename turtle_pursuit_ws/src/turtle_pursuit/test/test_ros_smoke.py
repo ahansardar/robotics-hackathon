@@ -36,6 +36,24 @@ def test_self_pose_falls_back_to_wheel_odometry_without_ground_truth():
     finally:
         catcher.destroy_node(); runner.destroy_node(); rclpy.shutdown()
 
+def test_fallback_active_flag_resets_so_a_second_dropout_logs_again():
+    """The fallback-active flag gates the diagnostic warning, not the pose
+    fallback itself (that's gated purely by ground-truth freshness) -- but if
+    it never resets when ground truth recovers, a flicker (drop, recover,
+    drop again) mid-match would only ever log its first occurrence, hiding a
+    second one from whoever is watching the console at the venue."""
+    rclpy.init()
+    catcher=CatcherNode()
+    try:
+        odom=Odometry(); odom.pose.pose.orientation.w=1.0
+        catcher.adapter._self_odom(odom,'catcher')
+        assert catcher.adapter._odom_fallback_active['catcher'] is True
+        fresh=Odometry(); fresh.pose.pose.position.x=-1.5; fresh.pose.pose.orientation.w=1.0
+        catcher.adapter._odom(fresh,catcher.adapter.catcher,'catcher')
+        assert catcher.adapter._odom_fallback_active['catcher'] is False
+    finally:
+        catcher.destroy_node(); rclpy.shutdown()
+
 def test_opponent_pose_falls_back_to_marker_detection_without_ground_truth():
     """With no ground truth at all, the opponent's pose must come from the
     RGB-D camera's colored-marker detection once this robot knows its own pose
@@ -66,6 +84,31 @@ def test_opponent_pose_falls_back_to_marker_detection_without_ground_truth():
         assert belief is not None and abs(belief.x-0.5)<0.05 and abs(belief.y)<0.05
     finally:
         catcher.destroy_node(); rclpy.shutdown()
+
+def test_catcher_keeps_pursuing_a_stale_target_instead_of_freezing():
+    """Losing the opponent's pose beyond stale_timeout (camera lost the marker,
+    no ground truth) previously froze the robot completely for the rest of the
+    match -- 'SEARCH' mode did not actually search, it just stopped, and could
+    never recover since a stationary robot's fixed-FOV camera can't reacquire
+    a target it isn't currently facing. It must keep pursuing the last known
+    position instead (flagged via a STALE_TARGET mode suffix), since a moving
+    robot has some chance of reacquiring or closing distance and a frozen one
+    has none. Only truly missing data (own pose, or an opponent estimate that
+    has literally never arrived) should still produce zero motion."""
+    import time
+    rclpy.init()
+    node=CatcherNode()
+    try:
+        now=node.adapter.now()
+        node.adapter.catcher.pose=Pose2D(-1.5,0.,0.,now); node.adapter.catcher.received=now
+        node.adapter.runner.pose=Pose2D(1.5,0.,math.pi,now-100); node.adapter.runner.received=now-100
+        modes=[]; node.mode_pub.publish=lambda m:modes.append(m.data)
+        for _ in range(20):
+            node.tick(); time.sleep(.05)
+        assert 'STALE_TARGET' in modes[-1] and modes[-1]!='WAITING'
+        assert node.limiter.last.linear>0.1  # genuinely moving, not frozen
+    finally:
+        node.destroy_node(); rclpy.shutdown()
 
 def test_evaluator_invalidates_capture_hold_across_a_stale_observability_gap():
     """RULEBOOK.md requires an UNBROKEN 1.0s hold inside the 0.5m capture
