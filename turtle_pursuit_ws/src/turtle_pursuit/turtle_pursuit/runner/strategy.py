@@ -4,6 +4,22 @@ from turtle_pursuit.control.motion import drive_to, drive_to_bidirectional, dyna
 
 def candidate_score(catcher, runner, target, previous_heading, cfg):
     dc=math.hypot(target.x-catcher.x,target.y-catcher.y)
+    # KNOWN GAP (not fixed): `corner` is a copy-paste duplicate of `clearance`
+    # (both min(arena_half-|x|, arena_half-|y|)), so open_weight silently just
+    # doubles clearance_weight's effect on one signal instead of implementing a
+    # distinct "corner risk" penalty as WINNING_STRATEGY.md describes. Confirmed
+    # long-standing (present since the first commit that added this function),
+    # not a regression. Tried a genuinely distinct two-axis formula (both sum
+    # and average of x_clear/y_clear); both reshaped candidate selection enough
+    # that a previously always-captured `strategic`-family Runner became
+    # uncapturable within 90s in benchmark testing (min separation stuck ~0.8-0.96
+    # instead of reaching the 0.5m capture radius) -- not a simple scaling issue,
+    # a real behavioral change with no other scoring term to compensate for
+    # `strategic`, which has no strategy-specific override unlike competitive/
+    # adversarial. Fixing this properly needs a broader weight-retuning pass
+    # (distance/clearance/open/smooth together) validated across the full
+    # benchmark sweep, not a one-line formula swap -- too large a behavioral
+    # change to ship unvalidated this close to competition. Reverted.
     clearance=min(cfg['arena_half']-abs(target.x),cfg['arena_half']-abs(target.y))
     corner=min(cfg['arena_half']-abs(target.x),cfg['arena_half']-abs(target.y))
     heading=math.atan2(target.y-runner.y,target.x-runner.x)
