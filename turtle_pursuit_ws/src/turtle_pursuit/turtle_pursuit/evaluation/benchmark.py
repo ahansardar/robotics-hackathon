@@ -7,7 +7,7 @@ from turtle_pursuit.tracking.velocity import VelocityEstimator
 from turtle_pursuit.evaluation.match import CaptureDetector
 
 C_CFG={'max_linear':.70,'cruise_linear':.44,'catcher_cruise_distance':1.,'catcher_boost_distance':3.5,'prediction_horizon':4.,'prediction_step':.2,'chase_distance':1.6,'capture_control_distance':.55,'capture_radius':.5,'capture_speed':.16,'turn_gain':2.2}
-R_CFG={'max_linear':.70,'cruise_linear':.44,'runner_full_boost_distance':3.2,'runner_boost_distance':5.,'shield_commit_distance':3.2,'emergency_escape_distance':1.15,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35}
+R_CFG={'max_linear':.70,'cruise_linear':.44,'runner_full_boost_distance':3.2,'runner_boost_distance':5.,'shield_commit_distance':2.4,'emergency_escape_distance':1.15,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35}
 
 def step_robot(p,cmd,dt): p.yaw=normalize_angle(p.yaw+max(-1.8,min(1.8,cmd.angular))*dt); p.x+=cmd.linear*math.cos(p.yaw)*dt; p.y+=cmd.linear*math.sin(p.yaw)*dt; return p
 # Two TurtleBot 4 Lite / Create 3 bases (~0.34 m outer diameter) would make

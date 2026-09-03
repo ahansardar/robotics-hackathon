@@ -243,11 +243,64 @@ def test_adaptive_navigator_recovery_has_a_reentry_cooldown():
     _,mode=navigator.command(Command(.5,0.),Pose2D(stamp=1.4),ranges,-math.pi,2*math.pi/360,target_bearing=0.,now=1.4)
     assert not mode.startswith('RECOVERY_')
 
+def test_mixed_strategy_holds_a_stable_heading_not_just_a_rank():
+    """Candidates are rescored from scratch every control cycle, and jitter-driven
+    ties among adjacent 15-degree headings can swap which candidate occupies a
+    held rank on nearly every tick -- turning a "held" choice into a heading that
+    whipsaws every 50ms instead of committing to one direction for the hold
+    window. While a rank stays held, the driven heading must change smoothly."""
+    cfg={'max_linear':.70,'cruise_linear':.44,'runner_full_boost_distance':3.2,'runner_boost_distance':5.0,
+         'shield_commit_distance':2.4,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,
+         'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35,
+         'emergency_escape_distance':1.15,'adversarial_break_weight':.9,'adversarial_interval':.8,
+         'survival_radial_weight':3.5,'safe_feint_distance':2.6,'shield_radius':1.05}
+    strategy=RunnerStrategy(cfg,seed=1)
+    c=Pose2D(-1.5,0.,0.,0.); r=Pose2D(1.5,0.,math.pi,0.)
+    dt=.05; headings=[]; ranks=[]
+    for step in range(60):
+        r.stamp=step*dt
+        strategy.command(c,r,'competitive')
+        if strategy.target is not None:
+            hx,hy=strategy.target.x-r.x,strategy.target.y-r.y
+            n=math.hypot(hx,hy) or 1.
+            r.x+=0.02*hx/n; r.y+=0.02*hy/n
+        headings.append(strategy.heading); ranks.append(strategy.mixed_rank)
+    held_transitions=[abs(math.degrees(normalize_angle(headings[i]-headings[i-1])))
+                       for i in range(1,len(headings)) if ranks[i]==ranks[i-1]]
+    assert held_transitions and max(held_transitions)<5.
+
+def test_navigator_exclude_bearing_ignores_the_opponents_own_body():
+    """A closing opponent sitting on the flee heading must not register as a
+    wall to route around -- that is what exclude_bearing/exclude_range are for
+    (already used by the Catcher to ignore the Runner it is chasing). Without
+    it, the same return is correctly treated as an obstacle."""
+    cfg={'max_linear':.70,'turn_gain':2.2,'lidar_stop_distance':.65,'lidar_influence_distance':1.35,
+         'navigator_robot_radius':.32,'navigator_clearance_cap':3.0}
+    ranges=[float('inf')]*360; ranges[180]=.5  # bearing 0 at angle_min=-pi, increment=2pi/360
+    desired=Command(.5,0.)
+    excluded=AdaptiveNavigator(cfg)
+    _,mode=excluded.command(desired,Pose2D(stamp=0.),ranges,-math.pi,2*math.pi/360,target_bearing=0.,exclude_bearing=0.,exclude_range=.75,now=0.)
+    assert mode=='DIRECT'
+    unexcluded=AdaptiveNavigator(cfg)
+    _,mode=unexcluded.command(desired,Pose2D(stamp=0.),ranges,-math.pi,2*math.pi/360,target_bearing=0.,now=0.)
+    assert mode!='DIRECT'
+
 def test_competitive_runner_prioritizes_radial_escape_under_threat():
     cfg={'max_linear':.46,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35,'emergency_escape_distance':1.15,'adversarial_break_weight':.9,'adversarial_interval':.8,'survival_radial_weight':3.5,'safe_feint_distance':2.6,'shield_radius':1.05,'shield_obstacles':[-2.,2.,2.,2.,-2.,-2.,2.,-2.]}
     strategy=RunnerStrategy(cfg,seed=1); catcher=Pose2D(-1.,0.); runner=Pose2D(1.,0.,math.pi,1.)
     command=strategy.command(catcher,runner,'competitive')
     assert strategy.mode=='BREAKAWAY' and command.linear<0
+
+def test_competitive_runner_can_shield_at_the_actual_match_start_distance():
+    """RULEBOOK.md fixes the start separation at 3.0m (Catcher/Runner spawn at
+    -1.5/+1.5). shield_commit_distance must stay below that or SHIELD -- the
+    Runner's documented central tactic -- can never activate in a real match."""
+    cfg={'shield_radius':1.05,'shield_obstacles':[2.,2.,2.,-2.],'emergency_escape_distance':1.15,
+         'arena_half':5.,'boundary_margin':.55,'max_linear':.70,'turn_gain':2.2}
+    strategy=RunnerStrategy(cfg)
+    catcher=Pose2D(-1.5,0.,0.,0.); runner=Pose2D(1.5,0.,math.pi,0.)
+    command=strategy.command(catcher,runner,'competitive')
+    assert strategy.mode=='SHIELD'
 
 def test_shield_target_stays_outside_obstacle_and_opposes_catcher():
     cfg={'shield_radius':1.05,'shield_obstacles':[2.,2.]}; strategy=RunnerStrategy(cfg); catcher=Pose2D(-2.,2.); runner=Pose2D(2.,.9)

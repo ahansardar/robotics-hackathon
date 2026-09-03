@@ -19,6 +19,22 @@ def drive_to(pose, target, max_speed=.45, turn_gain=2.2):
 
 def drive_to_bidirectional(pose, target, max_speed=.45, turn_gain=2.2):
     """Drive toward a target immediately, reversing when it is behind the robot."""
+    # KNOWN SHARP EDGE (not yet fixed): the forward/reverse choice is a hard
+    # cutoff at |error|==pi/2 with no memory of the previous choice. Right at
+    # that boundary, "turn left and go forward" and "turn right and reverse"
+    # are equally valid (same rotation cost), and the commanded angular
+    # velocity flips sign discontinuously between them (e.g. +3.46 at 90 deg
+    # vs -3.42 at 91 deg, confirmed empirically) while linear speed stays
+    # continuous. If a target bearing hovers near that boundary across ticks,
+    # this can flip the steering direction repeatedly instead of committing.
+    # A real fix needs hysteresis (remember the last forward/reverse choice),
+    # which means this becoming stateful -- it's currently a pure function
+    # used at 3 call sites including boundary_recovery, called fresh every
+    # tick with nowhere to keep that state. Deferred post-Round-1: doesn't
+    # explain the degenerate 180-degree startup case (that's error~180 deg,
+    # nowhere near this boundary, and already behaves correctly/is tested),
+    # and a stateful refactor of a widely-shared function is higher regression
+    # risk than the payoff justifies this close to competition.
     heading=math.atan2(target.y-pose.y,target.x-pose.x)
     error=normalize_angle(heading-pose.yaw)
     if abs(error)<=math.pi/2:

@@ -6,7 +6,7 @@
     cruise_linear: 0.44
     runner_full_boost_distance: 3.2
     runner_boost_distance: 5.0
-    shield_commit_distance: 3.2
+    shield_commit_distance: 2.4 # must stay below RULEBOOK.md's fixed 3.0m start separation, or SHIELD never activates
     catcher_cruise_distance: 1.0
     catcher_boost_distance: 3.5
     max_angular: 1.8

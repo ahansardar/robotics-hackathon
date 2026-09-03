@@ -14,7 +14,7 @@ class RunnerStrategy:
     def __init__(self,cfg,seed=1):
         self.cfg=cfg; self.rng=random.Random(seed); self.heading=0.0; self.target=None; self.mode='EVADE'; self.waypoint=0
         self.shield_obstacle=None; self.detected_obstacles=[]
-        self.mixed_rank=0; self.mixed_strategy_until=None
+        self.mixed_rank=0; self.mixed_strategy_until=None; self.mixed_heading=None
         # Fixed organizer-style Round 1 course, clear of the four arena obstacles.
         self.standard_course=[Pose2D(3.6,0.0),Pose2D(3.6,3.6),Pose2D(0.0,3.6),Pose2D(-3.6,3.6),Pose2D(-3.6,0.0),Pose2D(-3.6,-3.6),Pose2D(0.0,-3.6),Pose2D(3.6,-3.6)]
     def set_obstacles(self,obstacles):
@@ -76,7 +76,7 @@ class RunnerStrategy:
             self.mode='STANDARDIZED'; return drive_to(r,self.target,min(self.cfg.get('cruise_linear',.44),self.cfg['max_linear']),self.cfg['turn_gain'])
         separation=math.hypot(r.x-c.x,r.y-c.y)
         speed=self.speed_for_separation(separation)
-        if strategy=='competitive' and separation>=self.cfg.get('shield_commit_distance',3.2):
+        if strategy=='competitive' and separation>=self.cfg.get('shield_commit_distance',2.4):
             self.target=self.shield_target(c,r)
             if self.target is not None:
                 self.mode='SHIELD'
@@ -100,7 +100,7 @@ class RunnerStrategy:
                 score+=self.cfg.get('survival_radial_weight',3.5)*(1.+threat)*math.cos(normalize_angle(h-away))
                 if separation>=self.cfg.get('safe_feint_distance',2.6): score+=.45*math.cos(normalize_angle(h-break_heading))
             candidates.append((score,h,t))
-        breakaway=emergency or (strategy=='competitive' and separation<self.cfg.get('shield_commit_distance',3.2))
+        breakaway=emergency or (strategy=='competitive' and separation<self.cfg.get('shield_commit_distance',2.4))
         if advanced and not breakaway and len(candidates)>1:
             # Mixed strategy: hold a randomly-chosen rank among the top-scoring
             # candidates for a short window instead of always taking the single
@@ -118,10 +118,17 @@ class RunnerStrategy:
             now=r.stamp
             if self.mixed_strategy_until is None or now>=self.mixed_strategy_until:
                 k=min(self.cfg.get('mixed_strategy_top_k',3),len(candidates))
+                ranked=sorted(candidates,key=lambda x:x[0],reverse=True)
                 self.mixed_rank=self.rng.choices(range(k),weights=list(range(k,0,-1)),k=1)[0]
+                self.mixed_heading=ranked[self.mixed_rank][1]
                 self.mixed_strategy_until=now+self.cfg.get('mixed_strategy_hold',.6)
-            ranked=sorted(candidates,key=lambda x:x[0],reverse=True)
-            _,self.heading,self.target=ranked[min(self.mixed_rank,len(ranked)-1)]
+            # Track the heading chosen at reroll time, not its rank: candidates are
+            # rescored from scratch every tick, and jitter-driven ties among
+            # adjacent 15-degree headings can swap which candidate occupies a given
+            # rank on almost every tick -- turning a "held" rank into a heading that
+            # whipsaws every control cycle instead of committing to one
+            # exploratory direction for the whole hold window.
+            _,self.heading,self.target=min(candidates,key=lambda x:abs(normalize_angle(x[1]-self.mixed_heading)))
         else:
             _,self.heading,self.target=max(candidates,key=lambda x:x[0])
         self.mode='BREAKAWAY' if breakaway else ('COMPETITIVE' if strategy=='competitive' else ('ADVERSARIAL' if strategy=='adversarial' else ('STRATEGIC' if strategy=='strategic' else 'BASELINE')))
