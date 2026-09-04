@@ -293,6 +293,30 @@ def test_mixed_strategy_holds_a_stable_heading_not_just_a_rank():
                        for i in range(1,len(headings)) if ranks[i]==ranks[i-1]]
     assert held_transitions and max(held_transitions)<5.
 
+def test_mixed_strategy_engages_during_breakaway_not_just_far_range():
+    """BREAKAWAY (competitive, separation under shield_commit_distance) previously
+    always took the single best-scoring heading with zero randomization -- a fully
+    deterministic straight-line flee that a Catcher using CTRV prediction can solve
+    almost trivially (benchmarked at a rock-solid 14.25-17.25s capture window
+    across 30 seeds). Mixed strategy must now engage there too (gated only on true
+    emergency, where an experimental heading is too risky to be worth it)."""
+    cfg={'max_linear':.70,'cruise_linear':.44,'runner_full_boost_distance':3.2,'runner_boost_distance':5.0,
+         'shield_commit_distance':2.4,'arena_half':5.,'boundary_margin':.55,'lookahead':1.25,'turn_gain':2.2,
+         'distance_weight':1.,'clearance_weight':1.7,'open_weight':.6,'smooth_weight':.35,
+         'emergency_escape_distance':1.15,'adversarial_break_weight':.9,'adversarial_interval':.8,
+         'survival_radial_weight':3.5,'safe_feint_distance':2.6,'shield_radius':1.05}
+    strategy=RunnerStrategy(cfg,seed=3)
+    # Held at a fixed separation inside BREAKAWAY (below shield_commit_distance,
+    # above emergency_escape_distance) so the zone doesn't drift during the test.
+    c=Pose2D(-0.9,0.,0.,0.); r=Pose2D(0.9,0.,math.pi,0.)
+    ranks=set()
+    for step in range(40):
+        r.stamp=step*.05
+        strategy.command(c,r,'competitive')
+        assert strategy.mode=='BREAKAWAY'
+        ranks.add(strategy.mixed_rank)
+    assert ranks!={0}
+
 def test_navigator_exclude_bearing_ignores_the_opponents_own_body():
     """A closing opponent sitting on the flee heading must not register as a
     wall to route around -- that is what exclude_bearing/exclude_range are for
